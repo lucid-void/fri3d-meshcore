@@ -25,17 +25,16 @@ BASE = os.environ.get("BADGEHUB_BASE_URL", "https://badgehub.eu/api/v3").rstrip(
 SLUG = os.environ.get("BADGEHUB_SLUG", "meshcore")
 TOKEN = os.environ.get("BADGEHUB_API_TOKEN")
 
-# Dev-only files never shipped. metadata.json is managed via the metadata endpoint (which
-# writes the metadata.json file itself), so it is not uploaded as a raw file here.
-_EXCLUDE_NAMES = ("diag_radio.py", "rearm_radio.py", "metadata.json")
+# metadata.json is set via the metadata endpoint (which writes the metadata.json file
+# itself), so it is not uploaded as a raw file here.
+_EXCLUDE_NAMES = ("metadata.json",)
 # app_metadata fields BadgeHub accepts (project_type is a create-project field, not metadata)
 _META_KEYS = ("name", "description", "long_description", "categories", "author",
               "license_type", "version", "badges", "git_url")
 
 
 def _excluded(name):
-    return (name.startswith("test_") and name.endswith(".py")) \
-        or name in _EXCLUDE_NAMES or name.endswith(".pyc")
+    return name in _EXCLUDE_NAMES or name.endswith(".pyc")
 
 
 def runtime_files(appdir):

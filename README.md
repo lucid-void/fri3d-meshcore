@@ -1,7 +1,8 @@
 # MeshCore for MicroPythonOS
 
 A [MeshCore](https://meshcore.co.uk/) LoRa mesh client for the Fri3d Camp 2026 badge
-(ESP32-S3 + Seeed Wio-SX1262), packaged as a [MicroPythonOS](https://micropythonos.com) app.
+(ESP32-S3 + Seeed Wio-SX1262), packaged as a [MicroPythonOS](https://micropythonos.com) app and
+published on [BadgeHub](https://badgehub.eu) as the **`meshcore`** project.
 
 - **Companions & contacts** — learns companion nodes from adverts; add one as a contact to chat.
 - **Public `#` channels** — send/receive group messages, interoperable with the MeshCore apps.
@@ -15,83 +16,66 @@ Wire-compatible with real MeshCore nodes. Protocol logic is pure-Python and unit
 ## Layout
 
 ```
-org.fri3d.meshcore/   # the app payload — exactly what goes into the .mpk
-  MANIFEST.JSON               # app manifest (activity + boot_completed service)
-  metadata.json               # BadgeHub project descriptor
+org.fri3d.meshcore/          # the app payload — exactly what ships in the .mpk
+  MANIFEST.JSON              # app manifest (launcher activity + boot_completed service)
+  metadata.json             # BadgeHub project descriptor
   icon_64x64.png
-  meshcore.py                 # UI (activities)
-  meshcore_manager.py         # radio owner + background service (singleton)
-  meshcore_packet.py          # packet parse/serialize
-  meshcore_channel.py         # group-channel codec (AES-128 + HMAC)
-  meshcore_crypto.py          # Ed25519 / X25519 (pure-Python)
-  meshcore_advert.py          # advert parse/build + share URIs
-  meshcore_dm.py              # direct-message + ack codec
-  meshcore_boot_service.py    # boot_completed service (starts radio if enabled)
-  test_meshcore_*.py          # off-badge unit tests (NOT shipped in the .mpk)
-  diag_radio.py, rearm_radio.py  # on-badge diagnostics (NOT shipped in the .mpk)
-build_mpk.py                  # builds the runtime-only .mpk (no external deps)
+  meshcore.py               # UI (activities)
+  meshcore_manager.py       # radio owner + background service (singleton)
+  meshcore_packet.py        # packet parse/serialize
+  meshcore_channel.py       # group-channel codec (AES-128 + HMAC)
+  meshcore_crypto.py        # Ed25519 / X25519 (pure-Python)
+  meshcore_advert.py        # advert parse/build + share URIs
+  meshcore_dm.py            # direct-message + ack codec
+  meshcore_boot_service.py  # boot_completed service (starts the radio if enabled)
+tests/                      # off-badge unit tests (desktop CPython)
+build_mpk.py                # build the .mpk (no external deps)
+publish_badgehub.py         # publish to BadgeHub via its API (used by CI)
+.github/workflows/release.yml   # tag vX.Y.Z -> build + publish
 ```
 
-## Test (off-badge, desktop CPython)
+## Install
 
-```
-cd org.fri3d.meshcore
-for t in test_meshcore_*.py; do python3 "$t"; done
-```
+**On the badge:** open the **AppStore** app and install **MeshCore**. After launching, enable
+**Me → Radio service** (off by default). Only one LoRa app can use the SX1262 at a time — turn
+this off before opening the LoRa Chat app.
 
-## Build the package
-
-```
-python3 build_mpk.py    # -> org.fri3d.meshcore_<version>.mpk (runtime-only)
-```
-
-## Install on the badge
-
-Development (copy straight to the app dir over USB):
-
+**From source (development):**
 ```
 mpremote connect /dev/ttyACM0 fs cp -r org.fri3d.meshcore :/apps/
 ```
-Then power-cycle. Open the app and turn on **Me → Radio service** (off by default). Only one
-LoRa app can use the SX1262 at a time — turn this off before using the LoRa Chat app.
+then power-cycle.
 
-## Publish to BadgeHub
+## Develop
 
-The BadgeHub project is **`meshcore`** (badge `mpos_api_0`). Publishing is automated.
+Run the off-badge tests (pure CPython, the app dir goes on `PYTHONPATH`):
+```
+for t in tests/test_*.py; do PYTHONPATH=org.fri3d.meshcore python3 "$t"; done
+```
 
-### Cut a release (CI)
+Build the package locally:
+```
+python3 build_mpk.py          # -> org.fri3d.meshcore_<version>.mpk
+```
 
-1. Bump `version` (plain semver, no `v`) in **both** `org.fri3d.meshcore/MANIFEST.JSON` and
-   `org.fri3d.meshcore/metadata.json` — they must match.
+## Release
+
+Releases are automated: pushing a `vX.Y.Z` tag builds the `.mpk` and publishes it to BadgeHub
+(`.github/workflows/release.yml` → `publish_badgehub.py`). The `BADGEHUB_API_TOKEN` repo secret
+is already configured.
+
+1. Bump `version` (plain semver, **no** `v`) in **both** `org.fri3d.meshcore/MANIFEST.JSON` and
+   `org.fri3d.meshcore/metadata.json` — they must match (the CI asserts tag == manifest version).
 2. Commit, then tag and push:
    ```
-   git tag v0.4.1 && git push origin v0.4.1
+   git tag v0.4.1
+   git push origin main --tags
    ```
-3. The `Release to BadgeHub` GitHub Action (`.github/workflows/release.yml`) builds the `.mpk`
-   (as a run artifact), then runs `publish_badgehub.py` to upload the runtime files, set the
-   metadata, and publish the new version. The tag version must equal the manifest version or the
-   job fails.
 
-Requires repo secret **`BADGEHUB_API_TOKEN`** (a BadgeHub *project* API token for `meshcore`):
-Settings → Secrets and variables → Actions → New repository secret.
-
-### Manual publish
-
+Manual publish (e.g. to re-run or test):
 ```
-BADGEHUB_API_TOKEN=... python3 publish_badgehub.py          # upload + publish current version
-python3 publish_badgehub.py --dry-run                       # show what would be uploaded
-```
-
-### First-time project creation
-
-Done once via the BadgeHub.eu web UI (Create Project → badge `mpos_api_0`), which also mints the
-project API token. After that, releases are just tags.
-
-## Diagnostics (on-badge)
-
-```
-mpremote connect /dev/ttyACM0 run org.fri3d.meshcore/diag_radio.py   # radio snapshot
-mpremote connect /dev/ttyACM0 run org.fri3d.meshcore/rearm_radio.py  # force RX re-arm
+python3 publish_badgehub.py --dry-run                 # show what would be uploaded
+BADGEHUB_API_TOKEN=... python3 publish_badgehub.py    # upload + publish the current version
 ```
 
 ## License & credits

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build the MeshCore .mpk package for BadgeHub / MicroPythonOS.
 
-An .mpk is a ZIP whose single top-level folder is the app fullname. This produces a
-RUNTIME-ONLY package: the off-badge tests (test_*.py) and on-badge diagnostic tools
-(diag_radio.py, rearm_radio.py) live in the repo but are excluded from the package.
+An .mpk is a ZIP whose single top-level folder is the app fullname. The org.fri3d.meshcore/
+folder holds only shippable files (tests live in ../tests, not here), so this just packages
+it, skipping any stray bytecode.
 
 Deterministic (matches the intent of the docs' `zip -X -r -0` recipe): entries sorted with
 the top-level folder first, STORED/uncompressed, fixed timestamps, no platform extras.
@@ -19,17 +19,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 APPDIR = os.path.join(ROOT, APP)
 FIXED_DATE = (1980, 1, 1, 0, 0, 0)   # zip epoch -> reproducible builds
 
-EXCLUDE_FILES = ("diag_radio.py", "rearm_radio.py")
-
 
 def _excluded(rel):
     parts = rel.split("/")
-    if "__pycache__" in parts:
-        return True
-    base = parts[-1]
-    if base.startswith("test_") and base.endswith(".py"):
-        return True
-    return base in EXCLUDE_FILES or base.endswith(".pyc")
+    return "__pycache__" in parts or parts[-1].endswith(".pyc")
 
 
 def main():
