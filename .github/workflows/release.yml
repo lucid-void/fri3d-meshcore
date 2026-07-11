@@ -29,7 +29,7 @@ jobs:
           set -e
           for f in org.fri3d.meshcore/MANIFEST.JSON org.fri3d.meshcore/metadata.json; do
             sed -i -E 's/("version"[[:space:]]*:[[:space:]]*")[0-9]+\.[0-9]+\.[0-9]+(")/\1'"$VERSION"'\2/' "$f"
-            python3 -c "import json,sys; v=json.load(open('$f'))['version']; sys.exit('' if v=='$VERSION' else 'version not stamped in $f (got '+v+')')"
+            python3 -c "import json; assert json.load(open('$f'))['version']=='$VERSION', 'version not stamped in $f'"
           done
           echo "stamped version $VERSION into manifest + metadata"
 
