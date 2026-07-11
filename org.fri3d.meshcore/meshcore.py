@@ -37,6 +37,8 @@ class MeshCoreHome(Activity):
         self.advert_btn = None
         self.share_qr_btn = None
         self.service_switch = None
+        self._keygen_busy = False       # guard: one keygen thread at a time
+        self._advert_busy = False       # guard: one advertise thread at a time
         self._sub = None
 
     def onCreate(self):
@@ -269,8 +271,12 @@ class MeshCoreHome(Activity):
             self.share_qr_btn.add_flag(lv.obj.FLAG.HIDDEN)
 
     def _generate_identity(self):
-        # keygen is slow (pure-Python) -> run off the UI thread
-        lv.async_call(lambda _: self.identity_label.set_text("Generating identity...\n(may take a while)"), None)
+        # keygen is slow (pure-Python) -> run off the UI thread; ignore re-taps while busy
+        if self._keygen_busy:
+            return
+        self._keygen_busy = True
+        self.update_ui_threadsafe_if_foreground(
+            lambda: self.identity_label.set_text("Generating identity...\n(may take a while)"))
         try:
             import _thread
             from mpos import TaskManager
@@ -281,18 +287,26 @@ class MeshCoreHome(Activity):
             self._generate_identity_thread()
 
     def _generate_identity_thread(self):
-        MeshCoreManager.get_instance().generate_identity()
-        lv.async_call(lambda _: self._refresh_identity(), None)
+        try:
+            MeshCoreManager.get_instance().generate_identity()
+        finally:
+            self._keygen_busy = False
+        self.update_ui_threadsafe_if_foreground(self._refresh_identity)
 
     def _backup_identity(self):
         ok, info = MeshCoreManager.get_instance().backup_identity_to_sd()
         msg = ("Backed up to %s" % info) if ok else ("Backup failed: %s" % info)
         print("MeshCoreHome: backup ->", msg)
-        lv.async_call(lambda _: self.identity_label.set_text(self.identity_label.get_text() + "\n" + msg), None)
+        self.update_ui_threadsafe_if_foreground(
+            lambda: self.identity_label.set_text(self.identity_label.get_text() + "\n" + msg))
 
     def _advertise_now(self):
-        # signing is slow -> run off the UI thread
-        lv.async_call(lambda _: self.identity_label.set_text(self.identity_label.get_text() + "\nAdvertising..."), None)
+        # signing is slow -> run off the UI thread; ignore re-taps while busy
+        if self._advert_busy:
+            return
+        self._advert_busy = True
+        self.update_ui_threadsafe_if_foreground(
+            lambda: self.identity_label.set_text(self.identity_label.get_text() + "\nAdvertising..."))
         try:
             import _thread
             from mpos import TaskManager
@@ -302,10 +316,14 @@ class MeshCoreHome(Activity):
             self._advertise_thread()
 
     def _advertise_thread(self):
-        ok, err = MeshCoreManager.get_instance().advertise()
+        try:
+            ok, err = MeshCoreManager.get_instance().advertise()
+        finally:
+            self._advert_busy = False
         line = "Advertised." if ok else ("Advert failed: %s" % err)
-        lv.async_call(lambda _: (self._refresh_identity(),
-                                 self.identity_label.set_text(self.identity_label.get_text() + "\n" + line)), None)
+        self.update_ui_threadsafe_if_foreground(
+            lambda: (self._refresh_identity(),
+                     self.identity_label.set_text(self.identity_label.get_text() + "\n" + line)))
 
     def _share_contact(self):
         m = MeshCoreManager.get_instance()
@@ -362,18 +380,19 @@ class MeshCoreHome(Activity):
             self._sub = None
 
     def _on_event(self, event, data):
+        # runs on the manager's worker thread -> marshal to the UI only if still foreground
         if event == "node":
-            lv.async_call(lambda _: (self._refresh_nodes(), self._refresh_dms()), None)
+            self.update_ui_threadsafe_if_foreground(lambda: (self._refresh_nodes(), self._refresh_dms()))
         elif event == "channels":
-            lv.async_call(lambda _: self._refresh_channels(), None)
+            self.update_ui_threadsafe_if_foreground(self._refresh_channels)
         elif event == "identity":
-            lv.async_call(lambda _: (self._refresh_identity(), self._refresh_dms()), None)
+            self.update_ui_threadsafe_if_foreground(lambda: (self._refresh_identity(), self._refresh_dms()))
         elif event == "contacts":
-            lv.async_call(lambda _: (self._refresh_nodes(), self._refresh_dms()), None)
+            self.update_ui_threadsafe_if_foreground(lambda: (self._refresh_nodes(), self._refresh_dms()))
         elif event == "dm":
-            lv.async_call(lambda _: self._refresh_dms(), None)
+            self.update_ui_threadsafe_if_foreground(self._refresh_dms)
         elif event == "service":
-            lv.async_call(lambda _: self._sync_service_switch(data), None)
+            self.update_ui_threadsafe_if_foreground(lambda: self._sync_service_switch(data))
 
     def _sync_service_switch(self, on):
         if self.service_switch is None:
@@ -442,7 +461,8 @@ class ChannelChatActivity(Activity):
                 who = ("me" if not m.get("incoming") else m.get("sender", "?"))
                 lines.append("%s: %s" % (who, m.get("text", "")))
             text = "\n".join(lines)
-        lv.async_call(lambda _: self.messages.set_text(text), None)
+        # marshal to the UI thread + skip if the chat is no longer foreground
+        self.update_ui_threadsafe_if_foreground(lambda: self.messages.set_text(text))
 
     def _send(self, event):
         if self.input_textarea is None:
@@ -470,7 +490,7 @@ class ChannelChatActivity(Activity):
 
     def _on_event(self, event, data):
         if event == "message" and data and data[0] == self.channel:
-            lv.async_call(lambda _: self._render(), None)
+            self._render()   # _render marshals to the UI thread + foreground-guards itself
 
 
 class DMChatActivity(Activity):
@@ -547,7 +567,8 @@ class DMChatActivity(Activity):
                     mark = (" " + lv.SYMBOL.OK) if m.get("delivered") else ""
                     lines.append("me: %s%s" % (m.get("text", ""), mark))
             text = "\n".join(lines)
-        lv.async_call(lambda _: self.messages.set_text(text), None)
+        # marshal to the UI thread + skip if the chat is no longer foreground
+        self.update_ui_threadsafe_if_foreground(lambda: self.messages.set_text(text))
 
     def _send(self, event):
         if self.input_textarea is None or not self.pubkey:
@@ -556,11 +577,20 @@ class DMChatActivity(Activity):
         if not text:
             return
         self.input_textarea.set_text("")
+        # send_dm may derive the X25519 secret (~0.6s) if it isn't precomputed yet, so run it
+        # off the UI thread to avoid a freeze; the message + delivery tick update via the "dm" event.
+        try:
+            import _thread
+            from mpos import TaskManager
+            _thread.stack_size(TaskManager.good_stack_size())
+            _thread.start_new_thread(self._send_thread, (text,))
+        except Exception:
+            self._send_thread(text)
+
+    def _send_thread(self, text):
         ok, err = MeshCoreManager.get_instance().send_dm(self.pubkey, text)
-        if not ok:
-            lv.async_call(lambda _: self.status.set_text("Send failed: %s" % err), None)
-        else:
-            lv.async_call(lambda _: self.status.set_text(""), None)
+        msg = ("Send failed: %s" % err) if not ok else ""
+        self.update_ui_threadsafe_if_foreground(lambda: self.status.set_text(msg))
 
     def onResume(self, screen):
         super().onResume(screen)
@@ -579,7 +609,7 @@ class DMChatActivity(Activity):
 
     def _on_event(self, event, data):
         if event == "dm" and data and data[0] == self.pubkey:
-            lv.async_call(lambda _: self._render(), None)
+            self._render()   # _render marshals to the UI thread + foreground-guards itself
 
 
 class ShareQRActivity(Activity):

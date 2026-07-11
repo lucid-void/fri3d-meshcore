@@ -58,6 +58,7 @@ class _DummyLock:
 
 MAX_PACKETS = 100       # raw log cap
 MAX_MESSAGES = 200      # per-channel history cap
+MAX_NODES = 100         # learned-companions cap (RAM; a busy camp adverts many badges)
 MESHCORE_APP = "org.fri3d.meshcore"
 NICKNAME_PREFS = MESHCORE_APP
 
@@ -105,6 +106,9 @@ class MeshCoreManager:
         self._contacts = {}                      # contact pubkey_hex -> contact dict (persisted)
         self._pending_acks = {}                  # ack_hex -> (pubkey_hex, msg) for sent DMs
         self._pending_order = []                 # ack_hex FIFO, to cap _pending_acks
+        self._bringup_in_progress = False        # guard: one radio bring-up thread at a time
+        self._secrets_thread_running = False     # guard: one contact-secret precompute thread
+        self._dirty_history = set()              # contact pubkey_hex with unsaved DM history
         self._load_channels()
         self._load_contacts()
 
@@ -357,10 +361,23 @@ class MeshCoreManager:
             self._start_simulation()
             return
         self._ensure_worker()
-        import _thread
-        from mpos import TaskManager
-        _thread.stack_size(TaskManager.good_stack_size())
-        _thread.start_new_thread(self._radio_init_thread, ())
+        self._spawn_radio_init()
+
+    def _spawn_radio_init(self):
+        """Start a radio bring-up thread, but only ONE at a time -- double-tapping the service
+        toggle / Restart radio must not stack two threads hitting the shared SX1262 concurrently."""
+        if self._bringup_in_progress:
+            print("MeshCoreManager: radio bring-up already in progress, ignoring")
+            return
+        self._bringup_in_progress = True
+        try:
+            import _thread
+            from mpos import TaskManager
+            _thread.stack_size(TaskManager.good_stack_size())
+            _thread.start_new_thread(self._radio_init_thread, ())
+        except Exception as e:
+            self._bringup_in_progress = False
+            print("MeshCoreManager: could not start radio init:", repr(e))
 
     @staticmethod
     def _reset_lora_via_ch32():
@@ -430,6 +447,10 @@ class MeshCoreManager:
         except Exception as e:
             print("MeshCoreManager: radio init failed:", repr(e))
             self._running = False
+        finally:
+            self._bringup_in_progress = False
+        # warm per-contact shared secrets off the UI/RX path (avoids the first-DM freeze/stall)
+        self._spawn_secret_precompute()
 
     def restart(self):
         """Recover a wedged radio: stop, reset via CH32, and re-init (from the UI)."""
@@ -441,10 +462,7 @@ class MeshCoreManager:
             return
         self._running = True
         self._ensure_worker()
-        import _thread
-        from mpos import TaskManager
-        _thread.stack_size(TaskManager.good_stack_size())
-        _thread.start_new_thread(self._radio_init_thread, ())
+        self._spawn_radio_init()
 
     def stop(self):
         if not self._running:
@@ -452,11 +470,47 @@ class MeshCoreManager:
         self._running = False
         self._radio_ready = False
         if not simulation_mode and self._radio is not None:
+            # hold the radio lock so we never sleep the chip while the worker is mid-SPI
+            self._radio_lock.acquire()
             try:
                 self._radio.sleep(retainConfig=False)
             except Exception as e:
                 print("MeshCoreManager: stop/sleep error:", repr(e))
+            finally:
+                self._radio_lock.release()
+        self._flush_dirty_history()   # persist any coalesced DM history before going idle
         print("MeshCoreManager: stopped")
+
+    # --- per-contact shared-secret precompute (keep ECDH off UI/RX threads) - #
+    def _spawn_secret_precompute(self):
+        """Warm each contact's X25519 shared secret on a background thread so the ~0.6s ECDH
+        never runs on the UI thread (send_dm) or the RX worker (decode). MicroPython round-robins
+        threads, so this doesn't block RX polling. Only one such thread runs at a time."""
+        if simulation_mode or self._secrets_thread_running or not self.has_identity():
+            return
+        if not any(c.get("secret") is None for c in self._contacts.values()):
+            return
+        self._secrets_thread_running = True
+        try:
+            import _thread
+            from mpos import TaskManager
+            _thread.stack_size(TaskManager.good_stack_size())
+            _thread.start_new_thread(self._secret_precompute_thread, ())
+        except Exception as e:
+            self._secrets_thread_running = False
+            print("MeshCoreManager: could not start secret precompute:", repr(e))
+
+    def _secret_precompute_thread(self):
+        try:
+            for contact in list(self._contacts.values()):
+                if not self._running:
+                    break   # service turned off -> stop precomputing
+                if contact.get("secret") is None:
+                    self._node_secret(contact)   # computes + caches on the contact dict
+        except Exception as e:
+            print("MeshCoreManager: secret precompute error:", repr(e))
+        finally:
+            self._secrets_thread_running = False
 
     # --- receive path ------------------------------------------------------- #
     def _poll_radio_rx(self):
@@ -633,12 +687,15 @@ class MeshCoreManager:
                 except Exception as e:
                     print("MeshCoreManager: tx drain error:", repr(e))
                 did_tx = True
-            # 4) Idle: run the RX watchdog (re-arm/re-init if the chip fell out of RX),
-            #    then sleep briefly so we keep polling quickly. No auto-advert.
+            # 4) Idle: run the RX watchdog (re-arm/re-init if the chip fell out of RX), flush
+            #    any coalesced DM-history writes, then sleep briefly. No auto-advert.
             if not did_rx and not did_proc and not did_tx:
                 self._rx_watchdog()
+                if self._dirty_history:
+                    self._flush_dirty_history()
                 time.sleep(0.02)   # portable (MicroPython + CPython)
         self._worker_running = False
+        self._flush_dirty_history()   # persist anything pending as the worker exits
 
     @staticmethod
     def _meta(rssi, snr):
@@ -713,11 +770,15 @@ class MeshCoreManager:
             return
         self._seq += 1
         node = self._nodes.get(adv["pubkey"], {})
+        new_node = not node
         node.update(adv)
         node["rssi"] = rssi
         node["snr"] = snr
         node["seq"] = self._seq
         self._nodes[adv["pubkey"]] = node
+        # cap learned companions (RAM): evict the least-recently-heard non-contact
+        if new_node and len(self._nodes) > MAX_NODES:
+            self._evict_oldest_node()
         # if this companion is already a contact, refresh its live signal / last-heard
         # (contact *details* are persisted separately; live radio info stays in RAM).
         c = self._contacts.get(adv["pubkey"])
@@ -734,6 +795,15 @@ class MeshCoreManager:
         print("MeshCore companion: %s id=%s %s [UNVERIFIED]" % (
             node.get("name") or "?", node.get("id"), meta))
         self._notify("node", node)
+
+    def _evict_oldest_node(self):
+        """Drop the least-recently-heard learned companion to bound RAM. Contacts keep their
+        own persisted record in self._contacts, so evicting them from the learned list is safe."""
+        try:
+            oldest = min(self._nodes, key=lambda k: self._nodes[k].get("seq", 0))
+            del self._nodes[oldest]
+        except Exception:
+            pass
 
     def _handle_group_text(self, pkt, rssi, meta):
         try:
@@ -998,6 +1068,7 @@ class MeshCoreManager:
         }
         self._dm_messages.setdefault(pubkey_hex, [])
         self._save_contacts()
+        self._spawn_secret_precompute()   # derive the X25519 secret off the UI thread
         self._notify("contacts", None)
         return (True, None)
 
@@ -1049,17 +1120,34 @@ class MeshCoreManager:
             print("MeshCore: save contacts error:", repr(e))
 
     def _save_history(self, pubkey_hex):
+        """Mark a contact's DM history dirty; the worker coalesces the flash write (see
+        _flush_dirty_history). Avoids an O(n) full-list commit on every message AND its ACK,
+        and reduces flash wear. Writes immediately if there's no worker to coalesce."""
         if pubkey_hex not in self._contacts:
             return  # only contacts' history is stored
-        try:
-            from mpos import SharedPreferences
-            ed = SharedPreferences(NICKNAME_PREFS).edit()
-            ed.put_dict_item("dm_history", pubkey_hex, self._dm_messages.get(pubkey_hex, []))
-            ed.commit()
-        except Exception as e:
-            print("MeshCore: save history error:", repr(e))
+        self._dirty_history.add(pubkey_hex)
+        if not self._worker_running:
+            self._flush_dirty_history()
+
+    def _flush_dirty_history(self):
+        """Persist any contacts whose DM history changed since the last flush."""
+        if not self._dirty_history:
+            return
+        pending = list(self._dirty_history)
+        self._dirty_history.clear()
+        for pub_hex in pending:
+            if pub_hex not in self._contacts:
+                continue
+            try:
+                from mpos import SharedPreferences
+                ed = SharedPreferences(NICKNAME_PREFS).edit()
+                ed.put_dict_item("dm_history", pub_hex, self._dm_messages.get(pub_hex, []))
+                ed.commit()
+            except Exception as e:
+                print("MeshCore: save history error:", repr(e))
 
     def _delete_history(self, pubkey_hex):
+        self._dirty_history.discard(pubkey_hex)
         try:
             from mpos import SharedPreferences
             ed = SharedPreferences(NICKNAME_PREFS).edit()
