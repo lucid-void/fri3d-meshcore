@@ -58,7 +58,7 @@ class _DummyLock:
 
 MAX_PACKETS = 100       # raw log cap
 MAX_MESSAGES = 200      # per-channel history cap
-MESHCORE_APP = "com.micropythonos.meshcore"
+MESHCORE_APP = "org.fri3d.meshcore"
 NICKNAME_PREFS = MESHCORE_APP
 
 

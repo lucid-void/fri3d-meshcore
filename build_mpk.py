@@ -8,13 +8,13 @@ RUNTIME-ONLY package: the off-badge tests (test_*.py) and on-badge diagnostic to
 Deterministic (matches the intent of the docs' `zip -X -r -0` recipe): entries sorted with
 the top-level folder first, STORED/uncompressed, fixed timestamps, no platform extras.
 
-    python3 build_mpk.py    ->  com.micropythonos.meshcore_<version>.mpk
+    python3 build_mpk.py    ->  org.fri3d.meshcore_<version>.mpk
 """
 import json
 import os
 import zipfile
 
-APP = "com.micropythonos.meshcore"
+APP = "org.fri3d.meshcore"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 APPDIR = os.path.join(ROOT, APP)
 FIXED_DATE = (1980, 1, 1, 0, 0, 0)   # zip epoch -> reproducible builds

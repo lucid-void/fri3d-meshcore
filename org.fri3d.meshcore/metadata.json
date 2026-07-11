@@ -1,0 +1,12 @@
+{
+  "project_type": "app",
+  "name": "MeshCore",
+  "description": "MeshCore LoRa mesh client",
+  "long_description": "A MeshCore client over LoRa for the Fri3d Camp 2026 badge (MicroPythonOS). Learns companion nodes from adverts; add one as a contact to exchange encrypted direct messages (X25519 + AES-128 + HMAC) with delivery acknowledgements. Send and receive public # channel messages, interoperable with the MeshCore apps. Generates an on-device Ed25519 identity, floods signed adverts, and shares your contact as a QR. A Me-tab toggle runs the LoRa node in the background (receiving while the app is closed) with automatic radio recovery. By lucid-void.",
+  "categories": ["Communication"],
+  "author": "lucid-void",
+  "license_type": "MIT",
+  "version": "0.4.0",
+  "badges": ["mpos_api_0"],
+  "git_url": "https://github.com/lucid-void/fri3d-meshcore"
+}

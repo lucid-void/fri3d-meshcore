@@ -1,11 +1,11 @@
 # One-shot: re-arm the live radio into RX and report chip mode before/after.
 # Proves the "deaf = fell out of RX" diagnosis: if RX resumes after this, the fix works.
 #   cd ~/repos/MicroPythonOS/internal_filesystem
-#   mpremote connect /dev/ttyACM0 run apps/com.micropythonos.meshcore/rearm_radio.py
+#   mpremote connect /dev/ttyACM0 run apps/org.fri3d.meshcore/rearm_radio.py
 import sys
 import time
 if "meshcore_manager" not in sys.modules:
-    sys.path.append("/apps/com.micropythonos.meshcore")
+    sys.path.append("/apps/org.fri3d.meshcore")
 import meshcore_manager as MM
 
 m = MM.MeshCoreManager.get_instance()

@@ -1,14 +1,14 @@
 # Radio diagnostic snapshot for the running MeshCoreManager.
 # Run WITHOUT copying to the device:
 #   cd ~/repos/MicroPythonOS/internal_filesystem
-#   mpremote connect /dev/ttyACM0 run apps/com.micropythonos.meshcore/diag_radio.py
+#   mpremote connect /dev/ttyACM0 run apps/org.fri3d.meshcore/diag_radio.py
 #
 # Read-only: takes _radio_lock non-blockingly so it can't race the worker's RX poll.
 import sys
 import time
 
 if "meshcore_manager" not in sys.modules:
-    sys.path.append("/apps/com.micropythonos.meshcore")
+    sys.path.append("/apps/org.fri3d.meshcore")
 import meshcore_manager as MM
 
 m = MM.MeshCoreManager.get_instance()

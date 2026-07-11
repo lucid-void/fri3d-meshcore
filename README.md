@@ -15,8 +15,9 @@ Wire-compatible with real MeshCore nodes. Protocol logic is pure-Python and unit
 ## Layout
 
 ```
-com.micropythonos.meshcore/   # the app payload — exactly what goes into the .mpk
+org.fri3d.meshcore/   # the app payload — exactly what goes into the .mpk
   MANIFEST.JSON               # app manifest (activity + boot_completed service)
+  metadata.json               # BadgeHub project descriptor
   icon_64x64.png
   meshcore.py                 # UI (activities)
   meshcore_manager.py         # radio owner + background service (singleton)
@@ -34,14 +35,14 @@ build_mpk.py                  # builds the runtime-only .mpk (no external deps)
 ## Test (off-badge, desktop CPython)
 
 ```
-cd com.micropythonos.meshcore
+cd org.fri3d.meshcore
 for t in test_meshcore_*.py; do python3 "$t"; done
 ```
 
 ## Build the package
 
 ```
-python3 build_mpk.py    # -> com.micropythonos.meshcore_<version>.mpk (runtime-only)
+python3 build_mpk.py    # -> org.fri3d.meshcore_<version>.mpk (runtime-only)
 ```
 
 ## Install on the badge
@@ -49,7 +50,7 @@ python3 build_mpk.py    # -> com.micropythonos.meshcore_<version>.mpk (runtime-o
 Development (copy straight to the app dir over USB):
 
 ```
-mpremote connect /dev/ttyACM0 fs cp -r com.micropythonos.meshcore :/apps/
+mpremote connect /dev/ttyACM0 fs cp -r org.fri3d.meshcore :/apps/
 ```
 Then power-cycle. Open the app and turn on **Me → Radio service** (off by default). Only one
 LoRa app can use the SX1262 at a time — turn this off before using the LoRa Chat app.
@@ -64,6 +65,19 @@ LoRa app can use the SX1262 at a time — turn this off before using the LoRa Ch
 ## Diagnostics (on-badge)
 
 ```
-mpremote connect /dev/ttyACM0 run com.micropythonos.meshcore/diag_radio.py   # radio snapshot
-mpremote connect /dev/ttyACM0 run com.micropythonos.meshcore/rearm_radio.py  # force RX re-arm
+mpremote connect /dev/ttyACM0 run org.fri3d.meshcore/diag_radio.py   # radio snapshot
+mpremote connect /dev/ttyACM0 run org.fri3d.meshcore/rearm_radio.py  # force RX re-arm
 ```
+
+## License & credits
+
+MIT — © 2025 lucid-void. See [LICENSE](LICENSE).
+
+Adapts / interoperates with these MIT-licensed works (full notices in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)):
+
+- **[python-pure25519](https://github.com/warner/python-pure25519)** © Brian Warner — Ed25519 math.
+- **[meshcore-pi](https://github.com/brianwiddas/meshcore-pi)** © Brian Widdas — X25519 + identity crypto, reference impl.
+- **[MeshCore](https://github.com/ripplebiz/MeshCore)** © Scott Powell — protocol / wire-format reference.
+
+The AES-128 fallback and all protocol codecs are original pure-Python implementations.
