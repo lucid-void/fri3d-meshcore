@@ -96,7 +96,7 @@ class MeshCoreHome(Activity):
         nb.add_event_cb(lambda e: on_open(), lv.EVENT.CLICKED, None)
         nl = lv.label(nb)
         nl.set_text(text)
-        nl.set_long_mode(lv.label.LONG_MODE.DOT)
+        nl.set_long_mode(lv.label.LONG_MODE.WRAP)
         nl.set_width(lv.pct(100))
         if on_delete is not None:
             db = lv.button(row)
