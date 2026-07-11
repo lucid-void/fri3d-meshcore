@@ -24,6 +24,15 @@ jobs:
       - name: Derive version from tag (strip leading v)
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
+      - name: Stamp the tag version into MANIFEST + metadata
+        run: |
+          set -e
+          for f in org.fri3d.meshcore/MANIFEST.JSON org.fri3d.meshcore/metadata.json; do
+            sed -i -E 's/("version"[[:space:]]*:[[:space:]]*")[0-9]+\.[0-9]+\.[0-9]+(")/\1'"$VERSION"'\2/' "$f"
+            python3 -c "import json,sys; v=json.load(open('$f'))['version']; sys.exit('' if v=='$VERSION' else 'version not stamped in $f (got '+v+')')"
+          done
+          echo "stamped version $VERSION into manifest + metadata"
+
       - name: Build .mpk artifact
         run: python3 build_mpk.py
 

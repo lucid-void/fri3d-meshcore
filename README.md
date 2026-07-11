@@ -60,22 +60,24 @@ python3 build_mpk.py          # -> org.fri3d.meshcore_<version>.mpk
 
 ## Release
 
-Releases are automated: pushing a `vX.Y.Z` tag builds the `.mpk` and publishes it to BadgeHub
-(`.github/workflows/release.yml` → `publish_badgehub.py`). The `BADGEHUB_API_TOKEN` repo secret
-is already configured.
+Releases are automated and **the git tag is the version** — no files to edit. Pushing a
+`vX.Y.Z` tag runs `.github/workflows/release.yml`, which stamps `X.Y.Z` into `MANIFEST.JSON` +
+`metadata.json`, builds the `.mpk`, and publishes it to BadgeHub via `publish_badgehub.py`. The
+`BADGEHUB_API_TOKEN` repo secret is already configured.
 
-1. Bump `version` (plain semver, **no** `v`) in **both** `org.fri3d.meshcore/MANIFEST.JSON` and
-   `org.fri3d.meshcore/metadata.json` — they must match (the CI asserts tag == manifest version).
-2. Commit, then tag and push:
-   ```
-   git tag v0.4.1
-   git push origin main --tags
-   ```
+```
+git tag v0.4.1
+git push origin v0.4.1
+```
 
-Manual publish (e.g. to re-run or test):
+Use a **new** version each time (BadgeHub can't republish an existing one). The `version` fields
+committed in the repo are only a base for local builds / manual publish — CI overrides them from
+the tag.
+
+Manual publish (fallback; uses the committed version):
 ```
 python3 publish_badgehub.py --dry-run                 # show what would be uploaded
-BADGEHUB_API_TOKEN=... python3 publish_badgehub.py    # upload + publish the current version
+BADGEHUB_API_TOKEN=... python3 publish_badgehub.py    # upload + publish the committed version
 ```
 
 ## License & credits
