@@ -1,0 +1,154 @@
+"""Desktop CPython tests for meshcore_crypto (Ed25519 identity).
+
+Run:  python3 test_meshcore_crypto.py
+
+Validates the pure-Python Ed25519 against RFC 8032 / pure25519 known-answer vectors,
+checks the pure-Python SHA-512 against hashlib, and confirms MeshCore's 64-byte private
+key format (SHA512(seed)) produces the same keys/signatures as the seed path.
+"""
+
+import hashlib
+
+import meshcore_crypto as mc
+from meshcore_crypto import (
+    _sha512_pure, _publickey_from_seed, _sign_with_seed,
+    meshcore_private_key, public_key_from_private, sign, verify,
+    generate_keypair, shared_secret,
+)
+
+# RFC 8032 / pure25519 KAT vectors: (seed||pub hex, pub hex, msg hex, sig||msg hex)
+KAT = [
+    ("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+     "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+     "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+     "",
+     "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33"
+     "bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"),
+    ("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"
+     "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+     "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+     "72",
+     "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e1599"
+     "6e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"),
+    ("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"
+     "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+     "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+     "af82",
+     "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f2"
+     "90ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a"),
+    ("0d4a05b07352a5436e180356da0ae6efa0345ff7fb1572575772e8005ed978e9"
+     "e61a185bcef2613a6c7cb79763ce945d3b245d76114dd440bcf5f2dc1aa57057",
+     "e61a185bcef2613a6c7cb79763ce945d3b245d76114dd440bcf5f2dc1aa57057",
+     "cbc77b",
+     "d9868d52c2bebce5f3fa5a79891970f309cb6591e3e1702a70276fa97c24b3a8e58606c38c9758"
+     "529da50ee31b8219cba45271c689afa60b0ea26c99db19b00c"),
+]
+
+
+def _assert(c, m=""):
+    if not c:
+        raise AssertionError(m)
+
+
+def test_sha512_pure_matches_hashlib():
+    for data in (b"", b"abc", b"The quick brown fox", bytes(range(200))):
+        _assert(_sha512_pure(data) == hashlib.sha512(data).digest(),
+                "SHA-512 mismatch for %r" % data)
+
+
+def test_ed25519_kat_keygen_and_sign():
+    for seedpub, pub_hex, msg_hex, sigmsg_hex in KAT:
+        seed = bytes.fromhex(seedpub)[:32]
+        pub = bytes.fromhex(pub_hex)
+        msg = bytes.fromhex(msg_hex)
+        sig = bytes.fromhex(sigmsg_hex)[:64]
+        _assert(_publickey_from_seed(seed) == pub, "pubkey KAT failed")
+        _assert(_sign_with_seed(seed, msg) == sig, "signature KAT failed")
+        _assert(mc._checkvalid(sig, msg, pub) is True, "verify KAT failed")
+
+
+def test_verify_rejects_tampered():
+    seedpub, pub_hex, msg_hex, sigmsg_hex = KAT[1]
+    pub = bytes.fromhex(pub_hex)
+    msg = bytes.fromhex(msg_hex)
+    sig = bytearray(bytes.fromhex(sigmsg_hex)[:64])
+    sig[10] ^= 0x01
+    _assert(verify(pub, bytes(sig), msg) is False, "should reject tampered signature")
+    _assert(verify(pub, bytes.fromhex(sigmsg_hex)[:64], b"\x99" + msg) is False,
+            "should reject wrong message")
+
+
+def test_meshcore_64byte_key_equivalence():
+    # MeshCore stores SHA512(seed) as the 64-byte private key; signing with it must
+    # produce the SAME public key and signature as the 32-byte seed path.
+    for seedpub, pub_hex, msg_hex, sigmsg_hex in KAT:
+        seed = bytes.fromhex(seedpub)[:32]
+        pub = bytes.fromhex(pub_hex)
+        msg = bytes.fromhex(msg_hex)
+        sig = bytes.fromhex(sigmsg_hex)[:64]
+        prv64 = meshcore_private_key(seed)
+        _assert(len(prv64) == 64)
+        _assert(prv64 == hashlib.sha512(seed).digest())
+        _assert(public_key_from_private(prv64) == pub, "MeshCore pubkey mismatch")
+        _assert(sign(prv64, msg) == sig, "MeshCore signature mismatch")
+        _assert(verify(pub, sign(prv64, msg), msg) is True)
+
+
+def test_generate_keypair_roundtrip():
+    pub, prv64 = generate_keypair()
+    _assert(len(pub) == 32 and len(prv64) == 64)
+    _assert(pub[0] != 0x00 and pub[0] != 0xff, "reserved node id not avoided")
+    _assert(public_key_from_private(prv64) == pub)
+    msg = b"hello meshcore"
+    sig = sign(prv64, msg)
+    _assert(len(sig) == 64)
+    _assert(verify(pub, sig, msg) is True)
+    _assert(verify(pub, sig, b"tampered") is False)
+    # deterministic seed path
+    pub2, prv2 = generate_keypair(seed=bytes(range(32)))
+    _assert(prv2 == hashlib.sha512(bytes(range(32))).digest())
+    _assert(public_key_from_private(prv2) == pub2)
+
+
+def test_x25519_reference_vector():
+    # Reference generated by meshcore-pi's ed25519_wrapper.shared_secret (the impl that
+    # interoperates with real MeshCore nodes). Proves wire-compatibility, not just symmetry.
+    seedA = bytes(range(32))
+    seedB = bytes(range(32, 64))
+    pubA = bytes.fromhex("03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8")
+    pubB = bytes.fromhex("29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7")
+    expected = bytes.fromhex("f6f92efb32945aff683324a1c984c5001f46aaea513f3453138d740b3a604b7d")
+
+    prvA = meshcore_private_key(seedA)
+    prvB = meshcore_private_key(seedB)
+    # our Ed25519 pubkeys must match meshcore-pi's too
+    _assert(public_key_from_private(prvA) == pubA, "pubA mismatch")
+    _assert(public_key_from_private(prvB) == pubB, "pubB mismatch")
+    # X25519 shared secret matches the reference and is symmetric
+    _assert(shared_secret(prvA, pubB) == expected, "sAB != reference")
+    _assert(shared_secret(prvB, pubA) == expected, "sBA != reference")
+
+
+def test_x25519_symmetry_generated_keys():
+    pubA, prvA = generate_keypair(seed=bytes([1] * 32))
+    pubB, prvB = generate_keypair(seed=bytes([2] * 32))
+    sAB = shared_secret(prvA, pubB)
+    sBA = shared_secret(prvB, pubA)
+    _assert(len(sAB) == 32)
+    _assert(sAB == sBA, "ECDH not symmetric")
+    # different peers -> different secret
+    pubC, prvC = generate_keypair(seed=bytes([3] * 32))
+    _assert(shared_secret(prvA, pubC) != sAB)
+
+
+def _run_all():
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and callable(v)]
+    for t in tests:
+        t()
+        print("ok   %s" % t.__name__)
+    print("\n%d/%d tests passed" % (len(tests), len(tests)))
+
+
+if __name__ == "__main__":
+    _run_all()
