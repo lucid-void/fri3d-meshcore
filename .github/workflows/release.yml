@@ -1,0 +1,42 @@
+name: Release to BadgeHub
+
+# Tag a release as vX.Y.Z (matching the version in MANIFEST.JSON + metadata.json) and push
+# the tag; this builds the .mpk (as an artifact) and publishes the app to BadgeHub via its API.
+#
+# Requires repo secret BADGEHUB_API_TOKEN (a BadgeHub project API token for the `meshcore`
+# project). Settings -> Secrets and variables -> Actions -> New repository secret.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Derive version from tag (strip leading v)
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build .mpk artifact
+        run: python3 build_mpk.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mpk
+          path: '*.mpk'
+          if-no-files-found: error
+
+      - name: Install publisher deps
+        run: pip install requests
+
+      - name: Publish to BadgeHub
+        env:
+          BADGEHUB_API_TOKEN: ${{ secrets.BADGEHUB_API_TOKEN }}
+        run: python3 publish_badgehub.py --version "$VERSION"

@@ -57,10 +57,35 @@ LoRa app can use the SX1262 at a time — turn this off before using the LoRa Ch
 
 ## Publish to BadgeHub
 
-1. `python3 build_mpk.py` to produce the `.mpk`.
-2. On [BadgeHub.eu](https://badgehub.eu), create the project (first time), selecting the
-   `mpos_api_0` badge.
-3. Upload the `.mpk` as a new release. Bump `version` in `MANIFEST.JSON` (semver) each release.
+The BadgeHub project is **`meshcore`** (badge `mpos_api_0`). Publishing is automated.
+
+### Cut a release (CI)
+
+1. Bump `version` (plain semver, no `v`) in **both** `org.fri3d.meshcore/MANIFEST.JSON` and
+   `org.fri3d.meshcore/metadata.json` — they must match.
+2. Commit, then tag and push:
+   ```
+   git tag v0.4.1 && git push origin v0.4.1
+   ```
+3. The `Release to BadgeHub` GitHub Action (`.github/workflows/release.yml`) builds the `.mpk`
+   (as a run artifact), then runs `publish_badgehub.py` to upload the runtime files, set the
+   metadata, and publish the new version. The tag version must equal the manifest version or the
+   job fails.
+
+Requires repo secret **`BADGEHUB_API_TOKEN`** (a BadgeHub *project* API token for `meshcore`):
+Settings → Secrets and variables → Actions → New repository secret.
+
+### Manual publish
+
+```
+BADGEHUB_API_TOKEN=... python3 publish_badgehub.py          # upload + publish current version
+python3 publish_badgehub.py --dry-run                       # show what would be uploaded
+```
+
+### First-time project creation
+
+Done once via the BadgeHub.eu web UI (Create Project → badge `mpos_api_0`), which also mints the
+project API token. After that, releases are just tags.
 
 ## Diagnostics (on-badge)
 
