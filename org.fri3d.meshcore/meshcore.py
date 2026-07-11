@@ -37,6 +37,8 @@ class MeshCoreHome(Activity):
         self.advert_btn = None
         self.share_qr_btn = None
         self.service_switch = None
+        self.diag_label = None
+        self._diag_timer = None
         self._keygen_busy = False       # guard: one keygen thread at a time
         self._advert_busy = False       # guard: one advertise thread at a time
         self._sub = None
@@ -49,29 +51,107 @@ class MeshCoreHome(Activity):
         self._build_channels_tab(tabview.add_tab("Channels"))
         self._build_nodes_tab(tabview.add_tab("Companions"))
         self._build_dms_tab(tabview.add_tab("Contacts"))
-        self._build_me_tab(tabview.add_tab("Me"))
+        self._build_me_tab(tabview.add_tab(lv.SYMBOL.SETTINGS))   # "Me" -> a gear icon
+
+        # make the settings/gear tab narrow (it's just an icon) so the others get more room
+        try:
+            bar = tabview.get_tab_bar()
+            gear = bar.get_child(3)
+            gear.set_flex_grow(0)
+            gear.set_width(44)
+        except Exception as e:
+            print("MeshCoreHome: tab-bar sizing skipped:", repr(e))
 
         self.setContentView(screen)
 
-    # --- tabs --------------------------------------------------------------- #
+    # --- shared row + confirm helpers -------------------------------------- #
+    def _rows_container(self, tab):
+        """Style a tab as a flex column and return a scrollable child container for rows."""
+        tab.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+        tab.set_style_pad_all(6, 0)
+        tab.set_style_pad_gap(6, 0)
+        c = lv.obj(tab)
+        c.set_width(lv.pct(100))
+        c.set_flex_grow(1)
+        c.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+        c.set_style_pad_all(0, 0)
+        c.set_style_pad_gap(4, 0)
+        c.set_style_border_width(0, 0)
+        c.set_style_bg_opa(lv.OPA.TRANSP, 0)
+        return c
+
+    def _list_row(self, parent, text, on_open, on_delete=None):
+        """A row: a name button (tap = open) + an optional red trash button (tap = delete)."""
+        row = lv.obj(parent)
+        row.set_width(lv.pct(100))
+        row.set_height(lv.SIZE_CONTENT)
+        row.set_flex_flow(lv.FLEX_FLOW.ROW)
+        row.set_flex_align(lv.FLEX_ALIGN.SPACE_BETWEEN, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+        row.set_style_pad_all(0, 0)
+        row.set_style_pad_gap(6, 0)
+        row.set_style_border_width(0, 0)
+        row.set_style_bg_opa(lv.OPA.TRANSP, 0)
+        nb = lv.button(row)
+        nb.set_flex_grow(1)
+        nb.add_event_cb(lambda e: on_open(), lv.EVENT.CLICKED, None)
+        nl = lv.label(nb)
+        nl.set_text(text)
+        nl.set_long_mode(lv.label.LONG_MODE.DOT)
+        nl.set_width(lv.pct(100))
+        if on_delete is not None:
+            db = lv.button(row)
+            db.set_style_bg_color(lv.color_hex(0xC0392B), 0)   # red = destructive
+            db.add_event_cb(lambda e: on_delete(), lv.EVENT.CLICKED, None)
+            lv.label(db).set_text(lv.SYMBOL.TRASH)
+        return row
+
+    @staticmethod
+    def _hint(parent, text):
+        lbl = lv.label(parent)
+        lbl.set_text(text)
+        lbl.set_long_mode(lv.label.LONG_MODE.WRAP)
+        lbl.set_width(lv.pct(100))
+
+    @staticmethod
+    def _close_mbox(mbox):
+        try:
+            mbox.close()
+        except Exception:
+            pass
+
+    def _confirm(self, text, on_yes, yes="OK", no="Cancel"):
+        mbox = lv.msgbox()
+        mbox.set_width(DisplayMetrics.pct_of_width(80))
+        mbox.add_text(text)
+        yb = mbox.add_footer_button(yes)
+        yb.add_event_cb(lambda e: (self._close_mbox(mbox), on_yes()), lv.EVENT.CLICKED, None)
+        nb = mbox.add_footer_button(no)
+        nb.add_event_cb(lambda e: self._close_mbox(mbox), lv.EVENT.CLICKED, None)
+
+    # --- Channels tab ------------------------------------------------------- #
     def _build_channels_tab(self, tab):
-        self.channels_list = lv.list(tab)
-        self.channels_list.set_size(lv.pct(100), lv.pct(100))
+        add_btn = lv.button(tab)
+        add_btn.set_width(lv.pct(100))
+        add_btn.add_event_cb(lambda e: self._prompt_add_channel(), lv.EVENT.CLICKED, None)
+        lv.label(add_btn).set_text(lv.SYMBOL.PLUS + " New channel")
+        self.channels_list = self._rows_container(tab)
 
     def _refresh_channels(self):
         if self.channels_list is None:
             return
         self.channels_list.clean()
-        add_btn = self.channels_list.add_button(None, "+ New channel")
-        add_btn.add_event_cb(lambda e: self._prompt_add_channel(), lv.EVENT.CLICKED, None)
-        self.channels_list.add_text("Tap to open, long-press to remove")
         for name in MeshCoreManager.get_instance().get_channel_names():
-            btn = self.channels_list.add_button(None, "# " + name)
-            btn.add_event_cb(lambda e, n=name: self._open_channel(n), lv.EVENT.CLICKED, None)
-            if name != "Public":
-                # long-press to remove a custom channel
-                btn.add_event_cb(lambda e, n=name: self._remove_channel(n),
-                                 lv.EVENT.LONG_PRESSED, None)
+            on_del = None if name == "Public" else (lambda n=name: self._ask_delete_channel(n))
+            self._list_row(self.channels_list, "# " + name,
+                           lambda n=name: self._open_channel(n), on_del)
+
+    def _ask_delete_channel(self, name):
+        self._confirm("Delete channel #%s?" % name,
+                      lambda: self._do_remove_channel(name), yes="Delete")
+
+    def _do_remove_channel(self, name):
+        MeshCoreManager.get_instance().remove_channel(name)
+        lv.async_call(lambda _: self._refresh_channels(), None)
 
     def _open_channel(self, name):
         self.startActivity(Intent(activity_class=ChannelChatActivity, extras={"channel": name}))
@@ -84,7 +164,6 @@ class MeshCoreHome(Activity):
             self._on_add_channel)
 
     def _on_add_channel(self, result):
-        print("MeshCore: add-channel result:", result)
         if not result or not result.get("result_code"):
             return
         value = result.get("data", {}).get("value", "").strip()
@@ -99,23 +178,20 @@ class MeshCoreHome(Activity):
         print("MeshCore: add_channel(%r) -> ok=%s err=%s" % (name.strip(), ok, err))
         lv.async_call(lambda _: self._refresh_channels(), None)
 
-    def _remove_channel(self, name):
-        MeshCoreManager.get_instance().remove_channel(name)
-        lv.async_call(lambda _: self._refresh_channels(), None)
-
+    # --- Companions tab (learned nodes; tap to add as contact) -------------- #
     def _build_nodes_tab(self, tab):
         self.nodes_list = lv.list(tab)
         self.nodes_list.set_size(lv.pct(100), lv.pct(100))
 
     def _refresh_nodes(self):
-        # "Companions" tab: companions learned via advert this session (RAM only).
         if self.nodes_list is None:
             return
         self.nodes_list.clean()
         m = MeshCoreManager.get_instance()
         companions = m.get_learned_companions()
         if not companions:
-            self.nodes_list.add_button(None, "No companions heard yet...")
+            self.nodes_list.add_text("No companions heard yet. Nearby chat nodes show up "
+                                     "here; tap one to add it as a contact.")
             return
         self.nodes_list.add_text("Tap a companion to add it as a contact")
         for n in companions:
@@ -143,36 +219,38 @@ class MeshCoreHome(Activity):
                 return
         self._open_dm(pubkey_hex, name)
 
+    # --- Contacts tab ------------------------------------------------------- #
     def _build_dms_tab(self, tab):
-        self.dms_list = lv.list(tab)
-        self.dms_list.set_size(lv.pct(100), lv.pct(100))
+        self.dms_list = self._rows_container(tab)
 
     def _refresh_dms(self):
-        # "Contacts" tab: the saved contact list (only these can be chatted with).
         if self.dms_list is None:
             return
         self.dms_list.clean()
         m = MeshCoreManager.get_instance()
         if not m.has_identity():
-            self.dms_list.add_button(None, "Generate an identity (Me tab) to use DMs")
+            self._hint(self.dms_list, "Generate an identity (" + lv.SYMBOL.SETTINGS +
+                       " tab) to use DMs")
             return
         contacts = m.get_contacts()
         if not contacts:
-            self.dms_list.add_button(None, "No contacts yet -- add a companion from "
-                                           "the Companions tab")
+            self._hint(self.dms_list, "No contacts yet -- add a companion from the "
+                       "Companions tab")
             return
-        self.dms_list.add_text("Tap to chat, long-press to remove")
         for c in contacts:
-            name = c.get("name") or ("id " + c.get("id", "??"))
             pub = c.get("pubkey")
-            btn = self.dms_list.add_button(None, "%s  %s" % (name, c.get("id", "")))
-            if pub:
-                btn.add_event_cb(lambda e, p=pub, nm=name: self._open_dm(p, nm),
-                                 lv.EVENT.CLICKED, None)
-                btn.add_event_cb(lambda e, p=pub: self._remove_contact(p),
-                                 lv.EVENT.LONG_PRESSED, None)
+            if not pub:
+                continue
+            name = c.get("name") or ("id " + c.get("id", "??"))
+            self._list_row(self.dms_list, "%s  %s" % (name, c.get("id", "")),
+                           lambda p=pub, nm=name: self._open_dm(p, nm),
+                           lambda p=pub, nm=name: self._ask_delete_contact(p, nm))
 
-    def _remove_contact(self, pubkey_hex):
+    def _ask_delete_contact(self, pubkey_hex, name):
+        self._confirm("Remove contact %s?\n(this also deletes the chat history)" % name,
+                      lambda: self._do_remove_contact(pubkey_hex), yes="Delete")
+
+    def _do_remove_contact(self, pubkey_hex):
         MeshCoreManager.get_instance().remove_contact(pubkey_hex)
         lv.async_call(lambda _: self._refresh_dms(), None)
 
@@ -203,10 +281,22 @@ class MeshCoreHome(Activity):
 
         svc_note = lv.label(tab)
         svc_note.set_text("On = run the LoRa node (receive in the background + send). "
-                          "Off = radio idle. Turn off before using the LoRa Chat app.")
+                          "Off = radio idle. You'll be asked to confirm. Turn off before "
+                          "using the LoRa Chat app.")
         svc_note.set_long_mode(lv.label.LONG_MODE.WRAP)
         svc_note.set_width(lv.pct(100))
         svc_note.set_style_text_font(lv.font_montserrat_12, lv.PART.MAIN)
+
+        # --- live radio diagnostics (updated by a timer while this screen is open) ---
+        diag_box = lv.obj(tab)
+        diag_box.set_width(lv.pct(100))
+        diag_box.set_height(lv.SIZE_CONTENT)
+        diag_box.set_style_pad_all(8, 0)
+        self.diag_label = lv.label(diag_box)
+        self.diag_label.set_text("Radio: ...")
+        self.diag_label.set_long_mode(lv.label.LONG_MODE.WRAP)
+        self.diag_label.set_width(lv.pct(100))
+        self.diag_label.set_style_text_font(lv.font_montserrat_14, lv.PART.MAIN)
 
         self.name_label = lv.label(tab)
         self.name_label.set_text("Name: " + MeshCoreManager.get_instance().nickname())
@@ -355,9 +445,42 @@ class MeshCoreHome(Activity):
         MeshCoreManager.get_instance().restart()
 
     def _on_service_toggle(self, event):
-        on = self.service_switch.has_state(lv.STATE.CHECKED)
-        print("MeshCoreHome: radio service toggled", "on" if on else "off")
-        MeshCoreManager.get_instance().set_service_enabled(on)
+        # a switch is easy to brush by accident -> require a confirm; revert until confirmed
+        m = MeshCoreManager.get_instance()
+        want = self.service_switch.has_state(lv.STATE.CHECKED)
+        if want == m.is_service_enabled():
+            return  # programmatic sync, not a real user toggle
+        self._sync_service_switch(m.is_service_enabled())   # snap back until confirmed
+        self._confirm("Turn the radio service ON?" if want else "Turn the radio service OFF?",
+                      lambda: m.set_service_enabled(want), yes="Yes", no="No")
+
+    # --- live diagnostics --------------------------------------------------- #
+    @staticmethod
+    def _fmt_status(s):
+        if not s["enabled"]:
+            return "Radio service: OFF"
+        if not s["ready"]:
+            return "Radio: recovering..." if s["recovering"] else "Radio: starting..."
+        state = {"listening": "listening (RX)", "transmitting": "transmitting",
+                 "standby": "idle (standby)", "tuning": "tuning",
+                 "stuck": "STUCK -- power-cycle the badge"}.get(s["mode"], "starting...")
+        lines = ["Radio: " + state]
+        rx = s["last_rx_ms"]
+        seen = ("  (%ds ago)" % (rx // 1000)) if (rx is not None and rx < 3600000) else ""
+        lines.append("Received %d pkts%s" % (s["rx_count"], seen))
+        lines.append("Sent %d" % s["tx_count"] + ("  (%d queued)" % s["tx_pending"] if s["tx_pending"] else ""))
+        if s["reinits"]:
+            lines.append("Auto-recoveries: %d" % s["reinits"])
+        lines.append("Companions %d  Contacts %d" % (s["nodes"], s["contacts"]))
+        return "\n".join(lines)
+
+    def _diag_tick(self):
+        if self.diag_label is None:
+            return
+        try:
+            self.diag_label.set_text(self._fmt_status(MeshCoreManager.get_instance().radio_status()))
+        except Exception as e:
+            print("MeshCoreHome: diag tick error:", repr(e))
 
     # --- lifecycle ---------------------------------------------------------- #
     def onResume(self, screen):
@@ -372,12 +495,22 @@ class MeshCoreHome(Activity):
         self._refresh_dms()
         self._sub = lambda ev, data: self._on_event(ev, data)
         self.manager.add_subscriber(self._sub)
+        # live radio diagnostics on the Me tab, refreshed while this screen is foreground
+        self._diag_tick()
+        if self._diag_timer is None:
+            self._diag_timer = lv.timer_create(lambda t: self._diag_tick(), 2000, None)
 
     def onPause(self, screen):
         super().onPause(screen)
         if self.manager is not None and self._sub is not None:
             self.manager.remove_subscriber(self._sub)
             self._sub = None
+        if self._diag_timer is not None:
+            try:
+                self._diag_timer.delete()
+            except Exception:
+                pass
+            self._diag_timer = None
 
     def _on_event(self, event, data):
         # runs on the manager's worker thread -> marshal to the UI only if still foreground

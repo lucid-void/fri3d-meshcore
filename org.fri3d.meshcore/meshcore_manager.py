@@ -109,11 +109,62 @@ class MeshCoreManager:
         self._bringup_in_progress = False        # guard: one radio bring-up thread at a time
         self._secrets_thread_running = False     # guard: one contact-secret precompute thread
         self._dirty_history = set()              # contact pubkey_hex with unsaved DM history
+        # --- status/diagnostics (stashed by the worker so the UI never does raw radio SPI) ---
+        self._last_status_byte = None            # last SX1262 GetStatus byte (worker-read)
+        self._last_rx_ms = None                  # ticks_ms of the last received packet
+        self._last_tx_ms = None                  # ticks_ms of the last transmit
+        self._tx_count = 0                        # packets transmitted this session
+        self._reinit_count = 0                    # radio re-inits (wedge recoveries)
         self._load_channels()
         self._load_contacts()
 
     def is_running(self):
         return self._running
+
+    # --- status / diagnostics ---------------------------------------------- #
+    @staticmethod
+    def _now_ms():
+        import time
+        try:
+            return time.ticks_ms()
+        except AttributeError:
+            return int(time.time() * 1000)
+
+    def _ms_since(self, t):
+        if t is None:
+            return None
+        import time
+        now = self._now_ms()
+        try:
+            return time.ticks_diff(now, t)
+        except AttributeError:
+            return now - t
+
+    _MODE_NAMES = {0x20: "standby", 0x30: "standby", 0x40: "tuning",
+                   0x50: "listening", 0x60: "transmitting"}
+
+    def radio_status(self):
+        """lvgl-free status snapshot for the Me-tab diagnostics. Reads only fields the worker
+        stashed -- NEVER touches the radio SPI here (unlocked SPI from the UI wedges the chip)."""
+        st = self._last_status_byte
+        mode = None
+        if st is not None:
+            mode = self._MODE_NAMES.get(st & 0x70, "stuck")   # 0x00/unknown -> stuck
+        return {
+            "enabled": self.is_service_enabled(),
+            "running": self._running,
+            "ready": self._radio_ready,
+            "recovering": self._bringup_in_progress,
+            "mode": mode,
+            "rx_count": self._count,
+            "last_rx_ms": self._ms_since(self._last_rx_ms),
+            "tx_count": self._tx_count,
+            "last_tx_ms": self._ms_since(self._last_tx_ms),
+            "tx_pending": len(self._tx_queue),
+            "reinits": self._reinit_count,
+            "nodes": len(self._nodes),
+            "contacts": len(self._contacts),
+        }
 
     # --- background-service enable toggle (app-local pref, live) ------------ #
     def is_service_enabled(self):
@@ -543,6 +594,7 @@ class MeshCoreManager:
                 msg, err = self._radio.recv()   # re-arms RX + clears IRQ (via _readData)
                 if err == 0 and msg and len(msg) > 0:
                     self._rx_queue.append((bytes(msg), rssi, snr))
+                    self._last_rx_ms = self._now_ms()
                     got = True
                 else:
                     print("MeshCoreManager: recv err=%s" % SX1262.STATUS[err])
@@ -599,6 +651,7 @@ class MeshCoreManager:
             return  # bus busy (mid RX/TX) -> check again next tick
         try:
             st = self._radio.getStatus()
+            self._last_status_byte = st          # stash for the UI diagnostics (no SPI there)
             # chip mode = status bits [6:4]; 0x50 = RX (healthy).
             if (st & 0x70) == 0x50:
                 if self._rx_bad:
@@ -633,6 +686,7 @@ class MeshCoreManager:
             return
         self._last_reinit_ms = now
         self._rx_bad = 0
+        self._reinit_count += 1
         print("MeshCoreManager: radio re-init (recovering wedged radio)")
         try:
             self._bring_up_radio()   # sets _radio_ready True on success
@@ -1302,6 +1356,9 @@ class MeshCoreManager:
             # packets like adverts, which then re-armed RX mid-TX -> standby/deaf).
             time.sleep_ms(self._time_on_air_ms(len(raw)) + 120)
             ok = (result == 0)
+            if ok:
+                self._last_tx_ms = self._now_ms()
+                self._tx_count += 1
         except Exception as e:
             print("MeshCoreManager: TX exception:", repr(e))
         finally:
