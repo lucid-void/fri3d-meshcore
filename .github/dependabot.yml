@@ -17,3 +17,6 @@ updates:
       interval: weekly
     commit-message:
       prefix: "CI"
+    groups:
+      actions:            # one PR for all action bumps, not one per action
+        patterns: ["*"]
