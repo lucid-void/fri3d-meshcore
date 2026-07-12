@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Publish the app to BadgeHub via its REST API.
 
-Uploads the runtime files to the project's draft, sets the metadata, removes any files
-that are no longer part of the app, and publishes the draft as a new release. Used by the
-release GitHub Action on a `vX.Y.Z` tag, and runnable by hand.
+Uploads the runtime files AND the built .mpk to the project's draft, sets the metadata,
+removes any files that are no longer part of the app, and publishes the draft as a new
+release. Used by the release GitHub Action on a `vX.Y.Z` tag, and runnable by hand.
+
+The .mpk is what the AppStore actually installs: it looks for a .mpk/.zip among the
+project's files, and its unzipper requires the archive's single top-level folder to equal
+the BadgeHub SLUG (appstore_core.py derives the app fullname from the slug). So the slug,
+the MANIFEST fullname and the .mpk top dir must all be the same string -- see
+org.fri3d.hwtest, which does exactly this.
 
 Environment:
   BADGEHUB_API_TOKEN   project API token (required)  -> sent as the `badgehub-api-token` header
   BADGEHUB_BASE_URL    default https://badgehub.eu/api/v3
-  BADGEHUB_SLUG        default meshcore  (the BadgeHub project slug, NOT the fullname)
+  BADGEHUB_SLUG        default org.fri3d.meshcore  (must equal the app fullname)
 
 Usage:
   BADGEHUB_API_TOKEN=... python3 publish_badgehub.py [--version X.Y.Z] [--dry-run]
@@ -22,7 +28,7 @@ import sys
 
 APP = "org.fri3d.meshcore"
 BASE = os.environ.get("BADGEHUB_BASE_URL", "https://badgehub.eu/api/v3").rstrip("/")
-SLUG = os.environ.get("BADGEHUB_SLUG", "meshcore")
+SLUG = os.environ.get("BADGEHUB_SLUG", APP)   # the slug IS the fullname (see the docstring)
 TOKEN = os.environ.get("BADGEHUB_API_TOKEN")
 
 # metadata.json is set via the metadata endpoint (which writes the metadata.json file
@@ -70,13 +76,24 @@ def main():
         if want != ver:
             sys.exit("error: tag version %s != MANIFEST/metadata version %s" % (want, ver))
 
+    if SLUG != manifest["fullname"]:
+        sys.exit("error: slug %s != MANIFEST fullname %s -- the AppStore installs the .mpk "
+                 "into apps/<slug> and rejects an archive whose top dir is anything else"
+                 % (SLUG, manifest["fullname"]))
+
     files = runtime_files(appdir)
-    print("publishing %s v%s -> %s/projects/%s (%d files)" % (APP, ver, BASE, SLUG, len(files)))
+    mpk = "%s_%s.mpk" % (APP, ver)      # what the AppStore downloads and unzips
+    print("publishing %s v%s -> %s/projects/%s (%d files + %s)"
+          % (APP, ver, BASE, SLUG, len(files), mpk))
     if dry:
         for f in files:
             print("  would upload", f)
+        print("  would build + upload", mpk)
         print("  would patch metadata + publish")
         return
+
+    import build_mpk               # always rebuild, so the .mpk matches the stamped version
+    build_mpk.main()
 
     import requests   # only needed for the live path (CI installs it)
     s = requests.Session()
@@ -90,8 +107,13 @@ def main():
         r.raise_for_status()
         print("  uploaded", rel)
 
-    # remove any draft file no longer part of the app (e.g. a deleted module)
-    keep = set(files) | {"metadata.json"}
+    with open(os.path.join(root, mpk), "rb") as fh:
+        r = s.post("%s/draft/files/%s" % (proj, mpk), files={"file": (mpk, fh)}, timeout=300)
+    r.raise_for_status()
+    print("  uploaded", mpk)
+
+    # remove any draft file no longer part of the app (a deleted module, an older .mpk)
+    keep = set(files) | {"metadata.json", mpk}
     draft = s.get("%s/draft" % proj, timeout=60).json()
     for f in draft.get("version", {}).get("files", []):
         p = f.get("full_path") or f.get("name")

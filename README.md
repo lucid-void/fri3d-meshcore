@@ -2,7 +2,7 @@
 
 A [MeshCore](https://meshcore.co.uk/) LoRa mesh client for the Fri3d Camp 2026 badge
 (ESP32-S3 + Seeed Wio-SX1262), packaged as a [MicroPythonOS](https://micropythonos.com) app and
-published on [BadgeHub](https://badgehub.eu) as the **`meshcore`** project.
+published on [BadgeHub](https://badgehub.eu) as the **`org.fri3d.meshcore`** project.
 
 - **Companions & contacts** — learns companion nodes from adverts; add one as a contact to chat.
 - **Public `#` channels** — send/receive group messages, interoperable with the MeshCore apps.
@@ -64,6 +64,12 @@ Releases are automated and **the git tag is the version** — no files to edit. 
 `vX.Y.Z` tag runs `.github/workflows/release.yml`, which stamps `X.Y.Z` into `MANIFEST.JSON` +
 `metadata.json`, builds the `.mpk`, and publishes it to BadgeHub via `publish_badgehub.py`. The
 `BADGEHUB_API_TOKEN` repo secret is already configured.
+
+The BadgeHub **slug must equal the app fullname** (`org.fri3d.meshcore`): the AppStore takes
+the fullname from the slug, installs into `apps/<slug>`, and its unzipper rejects a `.mpk`
+whose top-level folder is anything else. The `.mpk` itself is what gets installed -- the loose
+files in the project are only there for browsing, so publishing without it makes the app
+un-installable ("Download failed").
 
 ```
 git tag v0.4.1
