@@ -1,6 +1,6 @@
 # MeshCore for MicroPythonOS
 
-A [MeshCore](https://meshcore.co.uk/) LoRa mesh client for the Fri3d Camp 2026 badge
+A [MeshCore](https://meshcore.io/) LoRa mesh client for the Fri3d Camp 2026 badge
 (ESP32-S3 + Seeed Wio-SX1262), packaged as a [MicroPythonOS](https://micropythonos.com) app and
 published on [BadgeHub](https://badgehub.eu) as the **`org.fri3d.meshcore`** project.
 
