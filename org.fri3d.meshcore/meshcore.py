@@ -47,7 +47,8 @@ class MeshCoreHome(Activity):
         self.backup_id_btn = None
         self.advert_btn = None
         self.share_qr_btn = None
-        self.service_switch = None
+        self.service_btn = None
+        self.service_btn_label = None
         self.diag_label = None
         self._diag_timer = None
         self._keygen_busy = False       # guard: one keygen thread at a time
@@ -139,13 +140,32 @@ class MeshCoreHome(Activity):
             pass
 
     def _confirm(self, text, on_yes, yes="OK", no="Cancel"):
+        # Remember what had focus: when the dialog closes, LVGL hands focus to whatever is next
+        # in the input group, which was jumping the tabview to another tab. Restore it instead.
+        grp = None
+        prev = None
+        try:
+            grp = lv.group_get_default()
+            prev = grp.get_focused()
+        except Exception:
+            pass
+
+        def _restore():
+            try:
+                if grp is not None and prev is not None:
+                    grp.focus_obj(prev)
+            except Exception:
+                pass
+
         mbox = lv.msgbox()
         mbox.set_width(DisplayMetrics.pct_of_width(80))
         mbox.add_text(text)
         yb = mbox.add_footer_button(yes)
-        yb.add_event_cb(lambda e: (self._close_mbox(mbox), on_yes()), lv.EVENT.CLICKED, None)
+        yb.add_event_cb(lambda e: (self._close_mbox(mbox), _restore(), on_yes()),
+                        lv.EVENT.CLICKED, None)
         nb = mbox.add_footer_button(no)
-        nb.add_event_cb(lambda e: self._close_mbox(mbox), lv.EVENT.CLICKED, None)
+        nb.add_event_cb(lambda e: (self._close_mbox(mbox), _restore()),
+                        lv.EVENT.CLICKED, None)
 
     # --- Channels tab ------------------------------------------------------- #
     def _build_channels_tab(self, tab):
@@ -285,21 +305,16 @@ class MeshCoreHome(Activity):
         tab.set_style_pad_all(12, 0)
         tab.set_style_pad_gap(10, 0)
 
-        # --- background radio service toggle (the app's on/off switch) ---
-        svc_row = lv.obj(tab)
-        svc_row.set_width(lv.pct(100))
-        svc_row.set_height(lv.SIZE_CONTENT)
-        svc_row.set_flex_flow(lv.FLEX_FLOW.ROW)
-        svc_row.set_flex_align(lv.FLEX_ALIGN.SPACE_BETWEEN, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
-        svc_row.set_style_pad_all(0, 0)
-        svc_row.set_style_border_width(0, 0)
-        svc_lbl = lv.label(svc_row)
-        svc_lbl.set_text("Radio service")
-        svc_lbl.set_style_text_font(lv.font_montserrat_16, lv.PART.MAIN)
-        self.service_switch = lv.switch(svc_row)
-        if MeshCoreManager.get_instance().is_service_enabled():
-            self.service_switch.add_state(lv.STATE.CHECKED)
-        self.service_switch.add_event_cb(self._on_service_toggle, lv.EVENT.VALUE_CHANGED, None)
+        # --- radio service on/off ---
+        # Deliberately a BUTTON, not a switch: a focused switch toggles on arrow keys, so just
+        # navigating over it flipped the radio. A button only fires on ENTER/tap, and then asks.
+        self.service_btn = _dark(lv.button(tab))
+        self.service_btn.set_width(lv.pct(100))
+        self.service_btn.add_event_cb(lambda e: self._on_service_button(), lv.EVENT.CLICKED, None)
+        self.service_btn_label = lv.label(self.service_btn)
+        self.service_btn_label.set_long_mode(lv.label.LONG_MODE.WRAP)
+        self.service_btn_label.set_width(lv.pct(100))
+        self._sync_service_button()
 
         svc_note = lv.label(tab)
         svc_note.set_text("On = run the LoRa node (receive in the background + send). "
@@ -466,13 +481,17 @@ class MeshCoreHome(Activity):
         print("MeshCoreHome: restart radio requested")
         MeshCoreManager.get_instance().restart()
 
-    def _on_service_toggle(self, event):
-        # a switch is easy to brush by accident -> require a confirm; revert until confirmed
+    def _sync_service_button(self, on=None):
+        if self.service_btn_label is None:
+            return
+        if on is None:
+            on = MeshCoreManager.get_instance().is_service_enabled()
+        self.service_btn_label.set_text(
+            "Radio service: ON  (tap to turn off)" if on else "Radio service: OFF  (tap to turn on)")
+
+    def _on_service_button(self):
         m = MeshCoreManager.get_instance()
-        want = self.service_switch.has_state(lv.STATE.CHECKED)
-        if want == m.is_service_enabled():
-            return  # programmatic sync, not a real user toggle
-        self._sync_service_switch(m.is_service_enabled())   # snap back until confirmed
+        want = not m.is_service_enabled()
         self._confirm("Turn the radio service ON?" if want else "Turn the radio service OFF?",
                       lambda: m.set_service_enabled(want), yes="Yes", no="No")
 
@@ -552,15 +571,7 @@ class MeshCoreHome(Activity):
             self.update_ui_threadsafe_if_foreground(
                 lambda: (self._refresh_channels(), self._refresh_dms()))
         elif event == "service":
-            self.update_ui_threadsafe_if_foreground(lambda: self._sync_service_switch(data))
-
-    def _sync_service_switch(self, on):
-        if self.service_switch is None:
-            return
-        if on:
-            self.service_switch.add_state(lv.STATE.CHECKED)
-        else:
-            self.service_switch.remove_state(lv.STATE.CHECKED)
+            self.update_ui_threadsafe_if_foreground(lambda: self._sync_service_button(data))
 
 
 class ChannelChatActivity(Activity):
