@@ -128,6 +128,16 @@ def main():
     s.patch("%s/publish" % proj, timeout=60).raise_for_status()
     print("  PUBLISHED v%s -> %s" % (ver, proj))
 
+    # The install is only as good as what the AppStore can find: it downloads the .mpk from
+    # the published revision. Fail the release loudly rather than ship an un-installable app.
+    pub = s.get(proj, timeout=60).json()
+    names = ["%s%s" % (f.get("name", ""), f.get("ext", ""))
+             for f in pub.get("version", {}).get("files", [])]
+    if mpk not in names:
+        sys.exit("error: %s is not in the published files (%s) -- the AppStore would fail "
+                 "with 'Download failed'" % (mpk, ", ".join(names)))
+    print("  verified %s is installable from the published revision" % mpk)
+
 
 if __name__ == "__main__":
     main()

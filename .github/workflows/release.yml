@@ -45,7 +45,12 @@ jobs:
       - name: Install publisher deps
         run: pip install requests
 
+      # Uploads the sources + the .mpk (the AppStore installs the .mpk), then publishes and
+      # verifies the .mpk is in the published revision. BADGEHUB_SLUG must equal the app
+      # fullname -- the AppStore installs into apps/<slug> and rejects a .mpk whose top-level
+      # folder is anything else.
       - name: Publish to BadgeHub
         env:
           BADGEHUB_API_TOKEN: ${{ secrets.BADGEHUB_API_TOKEN }}
+          BADGEHUB_SLUG: org.fri3d.meshcore
         run: python3 publish_badgehub.py --version "$VERSION"
