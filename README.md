@@ -95,6 +95,10 @@ Adapts / interoperates with these MIT-licensed works (full notices in
 
 - **[python-pure25519](https://github.com/warner/python-pure25519)** © Brian Warner — Ed25519 math.
 - **[meshcore-pi](https://github.com/brianwiddas/meshcore-pi)** © Brian Widdas — X25519 + identity crypto, reference impl.
-- **[MeshCore](https://github.com/ripplebiz/MeshCore)** © Scott Powell — protocol / wire-format reference.
+- **[MeshCore](https://github.com/ripplebiz/MeshCore)** © Scott Powell — protocol / wire-format
+  reference, and the wordmark the app icon is derived from (see FAQ 7.4).
+
+MESHCORE is a trademark of its owner. This is an independent, community-built client; it is not
+affiliated with or endorsed by the MeshCore project.
 
 The AES-128 fallback and all protocol codecs are original pure-Python implementations.

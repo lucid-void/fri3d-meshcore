@@ -28,6 +28,13 @@ Used as the protocol / wire-format reference (packet header, group-channel and d
 crypto, advert layout, and the PATH/ACK acknowledgement format). No source code is copied; the
 interoperable wire format is re-implemented in pure Python from the specification and source.
 
+**The app icon** (`org.fri3d.meshcore/icon_64x64.png`) is derived from the official MeshCore
+wordmark, which ships in that MIT-licensed repository at `logo/meshcore.svg` and which the
+MeshCore FAQ (7.4) makes available for use. The letterforms are the original ones, sliced
+between the "H" and the "C" and stacked to fit a square icon; nothing was redrawn or
+re-typeset. MESHCORE is a trademark of its owner: this app is an independent, community-built
+client and is not affiliated with or endorsed by the MeshCore project.
+
 ---
 
 MIT License
