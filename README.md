@@ -49,7 +49,14 @@ then power-cycle.
 Run the off-badge tests (pure CPython, the app dir goes on `PYTHONPATH`):
 ```
 for t in tests/test_*.py; do PYTHONPATH=org.fri3d.meshcore python3 "$t"; done
+python3 tools/check_app.py org.fri3d.meshcore --slug org.fri3d.meshcore
 ```
+
+Both run in CI on every push (`.github/workflows/ci.yml`), and the release is gated on them.
+`check_app.py` covers what the tests cannot: `meshcore.py`, `meshcore_manager.py` and
+`meshcore_boot_service.py` import `lvgl`/`mpos`, so nothing off-badge can import them -- it
+compiles them, and checks the manifest's entrypoints/classnames, the icon, and that the
+fullname matches the folder (and the BadgeHub slug).
 
 Build the package locally:
 ```

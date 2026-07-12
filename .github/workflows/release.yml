@@ -13,14 +13,40 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
+permissions:
+  contents: read
+
+concurrency:                 # two tags racing would fight over the same BadgeHub draft
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  # Never publish something that has not been tested: same tests + bundle checks as CI.
+  check:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Derive version from tag (strip leading v)
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # BadgeHub cannot republish a version that already exists, and the publish step is the
+      # LAST one -- so without this you find out after building and uploading everything.
+      - name: Fail fast if this version is already published
+        run: |
+          published=$(curl -sf -H 'User-Agent: meshcore-ci' \
+            "https://badgehub.eu/api/v3/projects/org.fri3d.meshcore" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['version']['app_metadata']['version'])" \
+            || echo "none")
+          echo "currently published: $published, releasing: $VERSION"
+          if [ "$published" = "$VERSION" ]; then
+            echo "::error::$VERSION is already published -- tag a new version"
+            exit 1
+          fi
 
       - name: Stamp the tag version into the MANIFEST
         run: |
@@ -56,3 +82,8 @@ jobs:
           badges: mpos_api_0
           license-type: MIT
           git-url: https://github.com/lucid-void/fri3d-meshcore
+
+      # Publishing succeeds whether or not the thing a badge actually downloads is there: a
+      # green release once shipped an app nobody could install. Ask the store, not the log.
+      - name: Verify the release is installable
+        run: python3 tools/verify_release.py org.fri3d.meshcore "$VERSION"

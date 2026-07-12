@@ -1,0 +1,39 @@
+name: CI
+
+# Runs on every push/PR -- and the release workflow calls it, so nothing is ever published
+# that has not been checked. Before this existed, the ONLY workflow was the tag-triggered
+# release: the tests never ran in CI at all.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # The protocol codecs are pure Python, so they run off-badge. These are the ones where a
+      # mistake is invisible until two nodes silently cannot read each other.
+      - name: Unit tests
+        run: |
+          set -e
+          for t in tests/test_*.py; do
+            echo "── $t"
+            PYTHONPATH=org.fri3d.meshcore python3 "$t"
+          done
+
+      # meshcore.py / meshcore_manager.py / meshcore_boot_service.py import lvgl and mpos, so
+      # no test can import them: without this, a syntax error in the UI ships to users.
+      - name: App bundle checks
+        run: python3 tools/check_app.py org.fri3d.meshcore --slug org.fri3d.meshcore
