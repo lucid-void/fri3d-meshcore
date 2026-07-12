@@ -99,17 +99,33 @@ def main():
     s = requests.Session()
     s.headers.update({"badgehub-api-token": TOKEN})
 
+    def ok(r, what):
+        """raise_for_status() hides BadgeHub's reason -- say why, and name the likely fix."""
+        if r.status_code < 400:
+            return r
+        reason = ""
+        try:
+            reason = r.json().get("reason") or ""
+        except Exception:
+            reason = (r.text or "")[:200]
+        if r.status_code in (401, 403):
+            sys.exit("error: BadgeHub rejected the token (%d) on %s\n  %s\n"
+                     "  The BADGEHUB_API_TOKEN secret must be an API token for the '%s' "
+                     "project (badgehub.eu -> the project -> API token)."
+                     % (r.status_code, what, reason, SLUG))
+        sys.exit("error: %s failed (%d): %s" % (what, r.status_code, reason))
+
     proj = "%s/projects/%s" % (BASE, SLUG)
     for rel in files:
         with open(os.path.join(appdir, rel), "rb") as fh:
             r = s.post("%s/draft/files/%s" % (proj, rel),
                        files={"file": (os.path.basename(rel), fh)}, timeout=120)
-        r.raise_for_status()
+        ok(r, "upload of " + rel)
         print("  uploaded", rel)
 
     with open(os.path.join(root, mpk), "rb") as fh:
         r = s.post("%s/draft/files/%s" % (proj, mpk), files={"file": (mpk, fh)}, timeout=300)
-    r.raise_for_status()
+    ok(r, "upload of " + mpk)
     print("  uploaded", mpk)
 
     # remove any draft file no longer part of the app (a deleted module, an older .mpk)
@@ -118,14 +134,14 @@ def main():
     for f in draft.get("version", {}).get("files", []):
         p = f.get("full_path") or f.get("name")
         if p and p not in keep:
-            s.delete("%s/draft/files/%s" % (proj, p), timeout=60).raise_for_status()
+            ok(s.delete("%s/draft/files/%s" % (proj, p), timeout=60), "removing " + p)
             print("  removed stale", p)
 
     body = {k: metadata[k] for k in _META_KEYS if k in metadata}
-    s.patch("%s/draft/metadata" % proj, json=body, timeout=60).raise_for_status()
+    ok(s.patch("%s/draft/metadata" % proj, json=body, timeout=60), "the metadata patch")
     print("  metadata set")
 
-    s.patch("%s/publish" % proj, timeout=60).raise_for_status()
+    ok(s.patch("%s/publish" % proj, timeout=60), "publish")
     print("  PUBLISHED v%s -> %s" % (ver, proj))
 
     # The install is only as good as what the AppStore can find: it downloads the .mpk from
