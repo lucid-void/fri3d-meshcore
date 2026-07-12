@@ -21,6 +21,17 @@ from mpos import (Activity, Intent, MposKeyboard, InputActivity, DisplayMetrics)
 
 from meshcore_manager import MeshCoreManager
 
+# Buttons default to the theme's accent colour, and the focus ring is that same colour --
+# so the selection is invisible on them. Give buttons a dark neutral fill (distinct from the
+# screen background) so the accent-coloured focus ring reads clearly.
+_BTN_BG = 0x39404B
+_BADGE_BG = 0xC0392B
+
+
+def _dark(btn):
+    btn.set_style_bg_color(lv.color_hex(_BTN_BG), 0)
+    return btn
+
 
 class MeshCoreHome(Activity):
 
@@ -80,8 +91,8 @@ class MeshCoreHome(Activity):
         c.set_style_bg_opa(lv.OPA.TRANSP, 0)
         return c
 
-    def _list_row(self, parent, text, on_open, on_delete=None):
-        """A row: a name button (tap = open) + an optional red trash button (tap = delete)."""
+    def _list_row(self, parent, text, on_open, on_delete=None, badge=0):
+        """A row: name button (tap = open), an unread badge, and an optional red trash button."""
         row = lv.obj(parent)
         row.set_width(lv.pct(100))
         row.set_height(lv.SIZE_CONTENT)
@@ -91,13 +102,21 @@ class MeshCoreHome(Activity):
         row.set_style_pad_gap(6, 0)
         row.set_style_border_width(0, 0)
         row.set_style_bg_opa(lv.OPA.TRANSP, 0)
-        nb = lv.button(row)
+        nb = _dark(lv.button(row))
         nb.set_flex_grow(1)
         nb.add_event_cb(lambda e: on_open(), lv.EVENT.CLICKED, None)
         nl = lv.label(nb)
         nl.set_text(text)
         nl.set_long_mode(lv.label.LONG_MODE.WRAP)
         nl.set_width(lv.pct(100))
+        if badge:
+            bl = lv.label(row)
+            bl.set_text(str(badge) if badge < 100 else "99+")
+            bl.set_style_bg_color(lv.color_hex(_BADGE_BG), 0)
+            bl.set_style_bg_opa(lv.OPA.COVER, 0)
+            bl.set_style_text_color(lv.color_hex(0xFFFFFF), 0)
+            bl.set_style_pad_all(5, 0)
+            bl.set_style_radius(12, 0)
         if on_delete is not None:
             db = lv.button(row)
             db.set_style_bg_color(lv.color_hex(0xC0392B), 0)   # red = destructive
@@ -130,7 +149,7 @@ class MeshCoreHome(Activity):
 
     # --- Channels tab ------------------------------------------------------- #
     def _build_channels_tab(self, tab):
-        add_btn = lv.button(tab)
+        add_btn = _dark(lv.button(tab))
         add_btn.set_width(lv.pct(100))
         add_btn.add_event_cb(lambda e: self._prompt_add_channel(), lv.EVENT.CLICKED, None)
         lv.label(add_btn).set_text(lv.SYMBOL.PLUS + " New channel")
@@ -140,10 +159,12 @@ class MeshCoreHome(Activity):
         if self.channels_list is None:
             return
         self.channels_list.clean()
-        for name in MeshCoreManager.get_instance().get_channel_names():
+        m = MeshCoreManager.get_instance()
+        for name in m.get_channel_names():
             on_del = None if name == "Public" else (lambda n=name: self._ask_delete_channel(n))
             self._list_row(self.channels_list, "# " + name,
-                           lambda n=name: self._open_channel(n), on_del)
+                           lambda n=name: self._open_channel(n), on_del,
+                           badge=m.get_unread(name))
 
     def _ask_delete_channel(self, name):
         self._confirm("Delete channel #%s?" % name,
@@ -244,7 +265,8 @@ class MeshCoreHome(Activity):
             name = c.get("name") or ("id " + c.get("id", "??"))
             self._list_row(self.dms_list, "%s  %s" % (name, c.get("id", "")),
                            lambda p=pub, nm=name: self._open_dm(p, nm),
-                           lambda p=pub, nm=name: self._ask_delete_contact(p, nm))
+                           lambda p=pub, nm=name: self._ask_delete_contact(p, nm),
+                           badge=m.get_unread(pub))
 
     def _ask_delete_contact(self, pubkey_hex, name):
         self._confirm("Remove contact %s?\n(this also deletes the chat history)" % name,
@@ -303,7 +325,7 @@ class MeshCoreHome(Activity):
         self.name_label.set_long_mode(lv.label.LONG_MODE.WRAP)
         self.name_label.set_width(lv.pct(100))
 
-        name_btn = lv.button(tab)
+        name_btn = _dark(lv.button(tab))
         name_btn.add_event_cb(lambda e: self._prompt_name(), lv.EVENT.CLICKED, None)
         lv.label(name_btn).set_text("Edit name")
 
@@ -312,23 +334,23 @@ class MeshCoreHome(Activity):
         self.identity_label.set_long_mode(lv.label.LONG_MODE.WRAP)
         self.identity_label.set_width(lv.pct(100))
 
-        self.gen_id_btn = lv.button(tab)
+        self.gen_id_btn = _dark(lv.button(tab))
         self.gen_id_btn.add_event_cb(lambda e: self._generate_identity(), lv.EVENT.CLICKED, None)
         lv.label(self.gen_id_btn).set_text("Generate identity (slow)")
 
-        self.backup_id_btn = lv.button(tab)
+        self.backup_id_btn = _dark(lv.button(tab))
         self.backup_id_btn.add_event_cb(lambda e: self._backup_identity(), lv.EVENT.CLICKED, None)
         lv.label(self.backup_id_btn).set_text("Backup keys to SD")
 
-        self.advert_btn = lv.button(tab)
+        self.advert_btn = _dark(lv.button(tab))
         self.advert_btn.add_event_cb(lambda e: self._advertise_now(), lv.EVENT.CLICKED, None)
         lv.label(self.advert_btn).set_text("Advertise now")
 
-        self.share_qr_btn = lv.button(tab)
+        self.share_qr_btn = _dark(lv.button(tab))
         self.share_qr_btn.add_event_cb(lambda e: self._share_contact(), lv.EVENT.CLICKED, None)
         lv.label(self.share_qr_btn).set_text("Share my contact (QR)")
 
-        restart_btn = lv.button(tab)
+        restart_btn = _dark(lv.button(tab))
         restart_btn.add_event_cb(lambda e: self._restart_radio(), lv.EVENT.CLICKED, None)
         lv.label(restart_btn).set_text("Restart radio")
 
@@ -524,6 +546,11 @@ class MeshCoreHome(Activity):
             self.update_ui_threadsafe_if_foreground(lambda: (self._refresh_nodes(), self._refresh_dms()))
         elif event == "dm":
             self.update_ui_threadsafe_if_foreground(self._refresh_dms)
+        elif event == "message":      # channel message -> unread badge may have changed
+            self.update_ui_threadsafe_if_foreground(self._refresh_channels)
+        elif event == "unread":       # a chat was read -> clear its badge
+            self.update_ui_threadsafe_if_foreground(
+                lambda: (self._refresh_channels(), self._refresh_dms()))
         elif event == "service":
             self.update_ui_threadsafe_if_foreground(lambda: self._sync_service_switch(data))
 
@@ -578,14 +605,16 @@ class ChannelChatActivity(Activity):
         self.keyboard.set_textarea(self.input_textarea)
         self.keyboard.add_flag(lv.obj.FLAG.HIDDEN)
 
-        send_button = lv.button(main_content)
+        send_button = _dark(lv.button(main_content))
         send_button.add_event_cb(self._send, lv.EVENT.CLICKED, None)
         lv.label(send_button).set_text("Send")
 
         self.setContentView(main_content)
 
     def _render(self):
-        msgs = MeshCoreManager.get_instance().get_messages(self.channel)
+        mgr = MeshCoreManager.get_instance()
+        mgr.clear_unread(self.channel)      # showing the messages == reading them
+        msgs = mgr.get_messages(self.channel)
         if not msgs:
             text = "No messages yet."
         else:
@@ -675,7 +704,7 @@ class DMChatActivity(Activity):
         self.keyboard.set_textarea(self.input_textarea)
         self.keyboard.add_flag(lv.obj.FLAG.HIDDEN)
 
-        send_button = lv.button(main_content)
+        send_button = _dark(lv.button(main_content))
         send_button.add_event_cb(self._send, lv.EVENT.CLICKED, None)
         lv.label(send_button).set_text("Send")
 
@@ -687,7 +716,9 @@ class DMChatActivity(Activity):
         self.setContentView(main_content)
 
     def _render(self):
-        msgs = MeshCoreManager.get_instance().get_dm_messages(self.pubkey)
+        mgr = MeshCoreManager.get_instance()
+        mgr.clear_unread(self.pubkey)       # showing the messages == reading them
+        msgs = mgr.get_dm_messages(self.pubkey)
         if not msgs:
             text = "No messages yet."
         else:

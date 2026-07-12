@@ -109,6 +109,7 @@ class MeshCoreManager:
         self._bringup_in_progress = False        # guard: one radio bring-up thread at a time
         self._secrets_thread_running = False     # guard: one contact-secret precompute thread
         self._dirty_history = set()              # contact pubkey_hex with unsaved DM history
+        self._unread = {}                        # channel name / contact pubkey_hex -> unread count
         # --- status/diagnostics (stashed by the worker so the UI never does raw radio SPI) ---
         self._last_status_byte = None            # last SX1262 GetStatus byte (worker-read)
         self._last_rx_ms = None                  # ticks_ms of the last received packet
@@ -397,6 +398,7 @@ class MeshCoreManager:
             return False
         self._channels = [c for c in self._channels if c.name != name]
         self._messages.pop(name, None)
+        self._unread.pop(name, None)
         self._save_channels()
         self._notify("channels", None)
         return True
@@ -876,9 +878,22 @@ class MeshCoreManager:
         }
         print("MeshCore [%s] %s: %s  (%s)" % (decoded["channel"], msg["sender"], msg["text"], meta))
         self._add_message(decoded["channel"], msg)
+        self._bump_unread(decoded["channel"])
         self._notify("message", (decoded["channel"], msg))
         self._post_notification(decoded["channel"], msg)
         return True
+
+    # --- unread counters (channel name / contact pubkey_hex) ---------------- #
+    def _bump_unread(self, key):
+        self._unread[key] = self._unread.get(key, 0) + 1
+
+    def get_unread(self, key):
+        return self._unread.get(key, 0)
+
+    def clear_unread(self, key):
+        """Called by a chat screen when it shows the messages (opened / new msg while open)."""
+        if self._unread.pop(key, 0):
+            self._notify("unread", key)
 
     # --- direct messages (1:1, X25519) ------------------------------------- #
     def _node_secret(self, node):
@@ -931,6 +946,7 @@ class MeshCoreManager:
                "rssi": rssi, "incoming": True}
         print("MeshCore DM <%s>: %s  (%s)" % (name, msg["text"], meta))
         self._add_dm(pub_hex, msg)
+        self._bump_unread(pub_hex)
         self._notify("dm", (pub_hex, msg))
         self._post_dm_notification(pub_hex, name, msg)
         # Acknowledge it (flood PATH-return with the embedded ack hash) so the sender's client
@@ -1131,6 +1147,7 @@ class MeshCoreManager:
             return False
         del self._contacts[pubkey_hex]
         self._dm_messages.pop(pubkey_hex, None)
+        self._unread.pop(pubkey_hex, None)
         self._save_contacts()
         self._delete_history(pubkey_hex)   # drop the stored chat history too
         self._notify("contacts", None)
