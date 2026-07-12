@@ -16,9 +16,10 @@
 # only once you ADD one as a contact can you chat, and the contact + history are persisted.
 # Repeaters/rooms/sensors are ignored -- the badge only deals with companions.
 
+import os
 import lvgl as lv
 
-from mpos import (Activity, Intent, MposKeyboard, InputActivity, DisplayMetrics)
+from mpos import (Activity, Intent, MposKeyboard, InputActivity, DisplayMetrics, FontManager)
 
 from meshcore_manager import MeshCoreManager
 
@@ -27,6 +28,21 @@ from meshcore_manager import MeshCoreManager
 # screen background) so the accent-coloured focus ring reads clearly.
 _BTN_BG = 0x39404B
 _BADGE_BG = 0xC0392B
+
+_NARROW_FONT = None
+
+def _load_narrow_font():
+    """Load a narrow font for chat messages. Cache it."""
+    global _NARROW_FONT
+    if _NARROW_FONT is None:
+        try:
+            mydir = os.path.dirname(os.path.abspath(__file__))
+            _NARROW_FONT = FontManager.getFont(size=14,
+                                             ttf=f"M:{mydir}/fonts/NimbusSansNarrow-Regular.ttf")
+        except Exception:
+            # Fall back to a built-in font if the TTF isn't available.
+            _NARROW_FONT = lv.font_montserrat_14
+    return _NARROW_FONT
 
 
 def _focusable(obj):
@@ -718,7 +734,7 @@ class ChannelChatActivity(Activity):
         self.messages = lv.label(msg_area)
         self.messages.set_text("No messages yet.")
         self.messages.set_long_mode(lv.label.LONG_MODE.WRAP)
-        self.messages.set_style_text_font(lv.font_montserrat_14, 0)
+        self.messages.set_style_text_font(_load_narrow_font(), 0)
         self.messages.set_width(lv.pct(100))
 
         self.input_textarea = lv.textarea(main_content)
@@ -830,7 +846,7 @@ class DMChatActivity(Activity):
         self.messages = lv.label(msg_area)
         self.messages.set_text("No messages yet.")
         self.messages.set_long_mode(lv.label.LONG_MODE.WRAP)
-        self.messages.set_style_text_font(lv.font_montserrat_14, 0)
+        self.messages.set_style_text_font(_load_narrow_font(), 0)
         self.messages.set_width(lv.pct(100))
 
         self.input_textarea = lv.textarea(main_content)
