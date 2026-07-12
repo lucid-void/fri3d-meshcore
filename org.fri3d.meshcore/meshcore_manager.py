@@ -24,8 +24,9 @@ except Exception as e:
     simulation_mode = True
 
 from meshcore_packet import (MeshCorePacket, make_header, encode_path_len,
-                             ROUTE_TYPE_FLOOD, PAYLOAD_TYPE_GRP_TXT, PAYLOAD_TYPE_ADVERT,
-                             PAYLOAD_TYPE_TXT_MSG, PAYLOAD_TYPE_PATH, PAYLOAD_TYPE_ACK)
+                             ROUTE_TYPE_FLOOD, ROUTE_TYPE_DIRECT, PAYLOAD_TYPE_GRP_TXT,
+                             PAYLOAD_TYPE_ADVERT, PAYLOAD_TYPE_TXT_MSG, PAYLOAD_TYPE_PATH,
+                             PAYLOAD_TYPE_ACK)
 from meshcore_channel import decode_group_text, encode_group_text, PUBLIC_CHANNEL, Channel
 from meshcore_advert import (parse_advert, build_advert_appdata, advert_signed_message,
                              assemble_advert_payload, ADV_TYPE_CHAT, contact_share_uri)
@@ -119,6 +120,8 @@ class MeshCoreManager:
         self._pending_order = []                 # ack_hex FIFO, to cap _pending_acks
         self._retries = []                       # unconfirmed sends awaiting an ack/echo
         self._repeater_heard = False             # heard a packet that travelled via a repeater
+        self._recent = {}                        # (msg key) -> timestamp, to spot resends
+        self._recent_order = []                  # key FIFO, to cap _recent
         self._bringup_in_progress = False        # guard: one radio bring-up thread at a time
         self._secrets_thread_running = False     # guard: one contact-secret precompute thread
         self._dirty_history = set()              # contact pubkey_hex with unsaved DM history
@@ -820,6 +823,27 @@ class MeshCoreManager:
         # always keep a raw log line
         self._log("#%d %s" % (self._count, pkt.summary()))
 
+    def _dup_message(self, key, ts, window=0):
+        """True if this message was already shown -- i.e. it is a RESEND of one.
+
+        The packet-hash de-dup above cannot catch a resend: a resend is deliberately a
+        different packet (that is the only way the mesh will re-flood it), so without this
+        the same message would appear twice in the chat. A DM's attempts all carry the same
+        timestamp (window=0). A channel's attempts step it by one (ts, ts+1, ts+2), so a
+        small window catches those while still letting someone genuinely repeat themselves
+        a few seconds later."""
+        prev = self._recent.get(key)
+        if prev is not None:
+            if abs(ts - prev) <= window:
+                return True
+            self._recent[key] = ts       # same text, but a new message
+            return False
+        self._recent[key] = ts
+        self._recent_order.append(key)
+        while len(self._recent_order) > 64:
+            self._recent.pop(self._recent_order.pop(0), None)
+        return False
+
     def _remember(self, h):
         """Record a packet hash; returns False if it was already seen."""
         if h in self._seen_set:
@@ -895,6 +919,10 @@ class MeshCoreManager:
             "rssi": rssi,
             "incoming": True,
         }
+        if self._dup_message(("ch", decoded["channel"], msg["sender"], msg["text"]),
+                             msg["ts"], window=CH_MAX_SENDS):
+            print("MeshCore [%s] %s: (resend, already shown)" % (decoded["channel"], msg["sender"]))
+            return True
         print("MeshCore [%s] %s: %s  (%s)" % (decoded["channel"], msg["sender"], msg["text"], meta))
         self._add_message(decoded["channel"], msg)
         self._bump_unread(decoded["channel"])
@@ -963,15 +991,19 @@ class MeshCoreManager:
         name = contact.get("name") or ("%02x" % got["src_hash"])
         msg = {"ts": got["timestamp"], "sender": name, "text": got["text"],
                "rssi": rssi, "incoming": True}
-        print("MeshCore DM <%s>: %s  (%s)" % (name, msg["text"], meta))
-        self._add_dm(pub_hex, msg)
-        self._bump_unread(pub_hex)
-        self._notify("dm", (pub_hex, msg))
-        self._post_dm_notification(pub_hex, name, msg)
-        # Acknowledge it (flood PATH-return with the embedded ack hash) so the sender's client
-        # marks the message delivered.
+        # A resend must still be ACKED -- they are resending precisely because our ack was
+        # lost -- but it must not show up in the chat a second time.
+        dup = self._dup_message(("dm", pub_hex, got["text"]), msg["ts"])
+        if dup:
+            print("MeshCore DM <%s>: (resend, already shown -- re-acking)" % name)
+        else:
+            print("MeshCore DM <%s>: %s  (%s)" % (name, msg["text"], meta))
+            self._add_dm(pub_hex, msg)
+            self._bump_unread(pub_hex)
+            self._notify("dm", (pub_hex, msg))
+            self._post_dm_notification(pub_hex, name, msg)
         try:
-            self._send_path_ack(got, pkt)
+            self._send_ack(got, pkt)
         except Exception as e:
             print("MeshCore: send ack error:", repr(e))
         return True
@@ -992,6 +1024,16 @@ class MeshCoreManager:
         return out
 
     @staticmethod
+    def _unhex(s):
+        if not s:
+            return None
+        try:
+            import binascii
+            return binascii.unhexlify(s.encode())
+        except Exception:
+            return None
+
+    @staticmethod
     def _rand_byte():
         try:
             import os
@@ -999,6 +1041,30 @@ class MeshCoreManager:
         except Exception:
             import time
             return int(time.time()) & 0xFF
+
+    def _send_ack(self, got, pkt):
+        """Acknowledge a received DM.
+
+        A DM that reached us by FLOOD gets a PATH-return carrying the ack: that is what
+        teaches the sender the route to us, so their next message can come direct. One that
+        already arrived DIRECT needs no route lesson, so it gets a plain ACK -- sent back
+        along the route we learned from them, or flooded if we have not learned one."""
+        if pkt.route_type == ROUTE_TYPE_FLOOD or not self._contacts.get(
+                got["pubkey"].hex(), {}).get("path"):
+            self._send_path_ack(got, pkt)
+        else:
+            self._send_bare_ack(got)
+
+    def _send_bare_ack(self, got):
+        contact = self._contacts.get(got["pubkey"].hex())
+        route, path_raw, path = self._route(contact)
+        ack6 = bytes(got["ack_hash"]) + bytes([0, self._rand_byte()])
+        out = MeshCorePacket(make_header(route, PAYLOAD_TYPE_ACK), path_raw, path, ack6)
+        try:
+            self._remember(out.packet_hash())
+        except Exception:
+            pass
+        self._enqueue_tx(out.to_bytes())
 
     def _send_path_ack(self, got, pkt):
         """Reply to a received DM with a flood PATH-return embedding its ack hash."""
@@ -1039,9 +1105,50 @@ class MeshCoreManager:
             return False
         if not dec:
             return False
+        self._learn_path(dec)
         if dec.get("ack_hash"):
             self._mark_delivered(dec["ack_hash"])
         return True
+
+    def _learn_path(self, dec):
+        """A contact told us the route back to them -- send DIRECT from now on.
+
+        This is the path our flood took to reach them, recorded hop by hop, and it is used
+        verbatim: path[0] is the next hop, and each repeater that matches it pops itself off
+        and forwards (Mesh.cpp). Direct routing costs a fraction of a flood's airtime, which
+        on a shared channel is the difference between a resend getting through and not."""
+        pub_hex = dec["pubkey"].hex()
+        contact = self._contacts.get(pub_hex)
+        if contact is None:
+            return
+        path = dec.get("path") or b""
+        if contact.get("path") == path:
+            return
+        contact["path"] = path
+        contact["path_raw"] = dec.get("path_len_raw", len(path))
+        hops = dec.get("path_len_raw", 0) & 63
+        print("MeshCore: learned route to %s (%d hop%s) -- sending direct from now on"
+              % (contact.get("name") or pub_hex[:2], hops, "" if hops == 1 else "s"))
+        self._save_contacts()
+
+    def _reset_path(self, pubkey_hex):
+        """The direct route stopped working -- forget it and flood again (resetPathTo)."""
+        contact = self._contacts.get(pubkey_hex)
+        if contact is None or not contact.get("path"):
+            return
+        contact["path"] = None
+        contact["path_raw"] = 0
+        print("MeshCore: direct route to %s failed -- back to flooding"
+              % (contact.get("name") or pubkey_hex[:2]))
+        self._save_contacts()
+
+    @staticmethod
+    def _route(contact):
+        """(route_type, path_len_raw, path) for a packet to this contact."""
+        path = (contact or {}).get("path")
+        if path:
+            return (ROUTE_TYPE_DIRECT, (contact.get("path_raw") or len(path)), path)
+        return (ROUTE_TYPE_FLOOD, encode_path_len(0), b"")
 
     def _handle_ack(self, pkt):
         """A bare ACK packet (direct-routed) -> mark the matching sent DM delivered."""
@@ -1085,6 +1192,11 @@ class MeshCoreManager:
                       % (rec["channel"], rec["attempt"] + 1))
                 self._notify("message", (rec["channel"], msg))
             else:
+                if rec.get("direct"):
+                    # It went out on the learned route and was not acked, so that route is
+                    # stale (a repeater moved/died). Forget it: the resend floods and the
+                    # contact will teach us the new route with its next PATH return.
+                    self._reset_path(rec["pubkey"])
                 if rec["attempt"] + 1 >= DM_MAX_SENDS:
                     self._give_up(rec)
                     continue
@@ -1186,8 +1298,10 @@ class MeshCoreManager:
         payload, expected_ack = meshcore_dm.encode_dm(
             rec["secret"], rec["pub"], rec["dst_hash"], rec["text"], rec["ts"],
             attempt=rec["attempt"])
-        pkt = MeshCorePacket(make_header(ROUTE_TYPE_FLOOD, PAYLOAD_TYPE_TXT_MSG),
-                             encode_path_len(0), b"", payload)
+        route, path_raw, path = self._route(self._contacts.get(rec["pubkey"]))
+        rec["direct"] = (route == ROUTE_TYPE_DIRECT)
+        pkt = MeshCorePacket(make_header(route, PAYLOAD_TYPE_TXT_MSG),
+                             path_raw, path, payload)
         try:
             self._remember(pkt.packet_hash())   # de-dupe the repeater's echo of our own DM
         except Exception:
@@ -1283,6 +1397,8 @@ class MeshCoreManager:
                     "secret": None,
                     "rssi": None,
                     "seq": 0,
+                    "path": self._unhex(entry.get("path")),
+                    "path_raw": entry.get("path_raw", 0),
                 }
                 self._dm_messages[pub_hex] = list(histories.get(pub_hex, []))
             except Exception as e:
@@ -1291,8 +1407,14 @@ class MeshCoreManager:
     def _save_contacts(self):
         try:
             from mpos import SharedPreferences
-            data = {h: {"name": c["name"], "type": c.get("type", ADV_TYPE_CHAT)}
-                    for h, c in self._contacts.items()}
+            data = {}
+            for h, c in self._contacts.items():
+                entry = {"name": c["name"], "type": c.get("type", ADV_TYPE_CHAT)}
+                path = c.get("path")
+                if path:                                  # the learned direct route
+                    entry["path"] = path.hex()
+                    entry["path_raw"] = c.get("path_raw") or len(path)
+                data[h] = entry
             ed = SharedPreferences(NICKNAME_PREFS).edit()
             ed.put_dict("contacts", data)
             ed.commit()

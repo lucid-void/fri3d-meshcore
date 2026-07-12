@@ -179,7 +179,7 @@ def _parse_path(pubkey, dst_hash, src_hash, pt):
     plen = hash_count * hash_size
     i = 1 + plen
     result = {"pubkey": bytes(pubkey), "src_hash": src_hash,
-              "path": bytes(pt[1:1 + plen]), "ack_hash": None}
+              "path": bytes(pt[1:1 + plen]), "path_len_raw": path_len_raw, "ack_hash": None}
     if len(pt) > i:
         extra_type = pt[i]
         i += 1
