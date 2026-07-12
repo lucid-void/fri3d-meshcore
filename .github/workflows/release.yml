@@ -62,7 +62,7 @@ jobs:
         with:
           app-dir: org.fri3d.meshcore
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mpk
           path: ${{ steps.package.outputs.mpk-path }}
