@@ -1,16 +1,17 @@
 # MeshCore client UI.
 #
 # Thin views on top of MeshCoreManager, which owns the radio and receives/sends in the
-# background (started at boot by MeshCoreBootService when selected, or on demand here).
+# background (started at boot by MeshCoreBootService when the radio service is enabled).
 #
-#   MeshCoreHome      -- launcher activity, gated by Settings > LoRa App. Tabview:
-#                          Channels (tap chat, long-press remove), Companions (learned this
-#                          session; tap to add as contact), Contacts (persisted; tap chat,
-#                          long-press remove), Me.
+#   MeshCoreHome        -- launcher activity. Tabview: Channels (tap chat, trash to remove),
+#                          Companions (learned this session; tap to add as contact),
+#                          Contacts (persisted; tap chat, trash to remove), and a gear tab
+#                          (radio service on/off, diagnostics, identity).
 #   ChannelChatActivity -- per public #channel chat: message list + input + send.
 #   DMChatActivity      -- per-contact 1:1 encrypted chat (X25519 + AES-128 + HMAC).
 #
-# One LoRa app owns the shared SX1262 at a time, so this mutually excludes LoRa Chat.
+# Only one LoRa app can own the shared SX1262, so turn the radio service off before using
+# the LoRa Chat app.
 # Companions are learned (UNVERIFIED -- advert signatures aren't checked) and kept in RAM;
 # only once you ADD one as a contact can you chat, and the contact + history are persisted.
 # Repeaters/rooms/sensors are ignored -- the badge only deals with companions.
@@ -28,9 +29,15 @@ _BTN_BG = 0x39404B
 _BADGE_BG = 0xC0392B
 
 
+def _focusable(obj):
+    """Tag a widget as one of ours, so _sync_tab_focus() can park it (see there)."""
+    obj.add_flag(lv.obj.FLAG.USER_1)
+    return obj
+
+
 def _dark(btn):
     btn.set_style_bg_color(lv.color_hex(_BTN_BG), 0)
-    return btn
+    return _focusable(btn)
 
 
 class MeshCoreHome(Activity):
@@ -38,6 +45,7 @@ class MeshCoreHome(Activity):
     def __init__(self):
         super().__init__()
         self.manager = None
+        self.tabview = None
         self.nodes_list = None
         self.channels_list = None
         self.dms_list = None
@@ -58,6 +66,7 @@ class MeshCoreHome(Activity):
     def onCreate(self):
         screen = lv.obj()
         tabview = lv.tabview(screen)
+        self.tabview = tabview
         tabview.set_tab_bar_size(36)
 
         self._build_channels_tab(tabview.add_tab("Channels"))
@@ -74,7 +83,50 @@ class MeshCoreHome(Activity):
         except Exception as e:
             print("MeshCoreHome: tab-bar sizing skipped:", repr(e))
 
+        tabview.add_event_cb(lambda e: self._sync_tab_focus(), lv.EVENT.VALUE_CHANGED, None)
+        self._sync_tab_focus()
+
         self.setContentView(screen)
+
+    # --- focus scoping ------------------------------------------------------ #
+    def _sync_tab_focus(self):
+        """Keep only the ACTIVE tab's widgets in the keyboard/joystick focus group.
+
+        LVGL scrolls tabview pages out of view but never hides them, so widgets on the
+        other tabs stay focus candidates. The OS ranks candidates by weighted distance
+        (13*forward^2 + sideways^2), so a row one screen to the left could beat the next
+        widget further down this tab -- focus jumped to another tab, and LVGL then
+        scrolled the tabview to reveal it. Park the inactive pages' widgets instead.
+        """
+        try:
+            grp = lv.group_get_default()
+            if grp is None or self.tabview is None:
+                return
+            content = self.tabview.get_content()
+            active = self.tabview.get_tab_active()
+            pages = [content.get_child(i) for i in range(content.get_child_count())]
+            if 0 <= active < len(pages):
+                # add before removing: if focus sits on a page we're about to park, LVGL
+                # refocuses on the fly and should land on this page, not on the tab bar.
+                self._set_page_focusable(grp, pages[active], True)
+            for i, page in enumerate(pages):
+                if i != active:
+                    self._set_page_focusable(grp, page, False)
+        except Exception as e:
+            print("MeshCoreHome: tab focus sync skipped:", repr(e))
+
+    @staticmethod
+    def _set_page_focusable(grp, page, on):
+        stack = [page]
+        while stack:
+            o = stack.pop()
+            if o.has_flag(lv.obj.FLAG.USER_1):
+                if on:
+                    grp.add_obj(o)          # a no-op if it's already a member
+                else:
+                    lv.group_remove_obj(o)
+            for i in range(o.get_child_count()):
+                stack.append(o.get_child(i))
 
     # --- shared row + confirm helpers -------------------------------------- #
     def _rows_container(self, tab):
@@ -119,7 +171,7 @@ class MeshCoreHome(Activity):
             bl.set_style_pad_all(5, 0)
             bl.set_style_radius(12, 0)
         if on_delete is not None:
-            db = lv.button(row)
+            db = _focusable(lv.button(row))
             db.set_style_bg_color(lv.color_hex(0xC0392B), 0)   # red = destructive
             db.add_event_cb(lambda e: on_delete(), lv.EVENT.CLICKED, None)
             lv.label(db).set_text(lv.SYMBOL.TRASH)
@@ -185,6 +237,7 @@ class MeshCoreHome(Activity):
             self._list_row(self.channels_list, "# " + name,
                            lambda n=name: self._open_channel(n), on_del,
                            badge=m.get_unread(name))
+        self._sync_tab_focus()
 
     def _ask_delete_channel(self, name):
         self._confirm("Delete channel #%s?" % name,
@@ -233,6 +286,7 @@ class MeshCoreHome(Activity):
         if not companions:
             self.nodes_list.add_text("No companions heard yet. Nearby chat nodes show up "
                                      "here; tap one to add it as a contact.")
+            self._sync_tab_focus()
             return
         self.nodes_list.add_text("Tap a companion to add it as a contact")
         for n in companions:
@@ -245,10 +299,11 @@ class MeshCoreHome(Activity):
                 name, mark,
                 ("%sdBm  " % rssi) if rssi is not None else "",
                 n.get("id", ""))
-            btn = self.nodes_list.add_button(None, label)
+            btn = _focusable(self.nodes_list.add_button(None, label))
             if pub:
                 btn.add_event_cb(lambda e, p=pub, nm=name: self._companion_tapped(p, nm),
                                  lv.EVENT.CLICKED, None)
+        self._sync_tab_focus()
 
     def _companion_tapped(self, pubkey_hex, name):
         # add to contacts if needed, then open the 1:1 chat
@@ -287,6 +342,7 @@ class MeshCoreHome(Activity):
                            lambda p=pub, nm=name: self._open_dm(p, nm),
                            lambda p=pub, nm=name: self._ask_delete_contact(p, nm),
                            badge=m.get_unread(pub))
+        self._sync_tab_focus()
 
     def _ask_delete_contact(self, pubkey_hex, name):
         self._confirm("Remove contact %s?\n(this also deletes the chat history)" % name,
