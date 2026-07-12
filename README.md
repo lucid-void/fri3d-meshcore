@@ -18,8 +18,7 @@ Wire-compatible with real MeshCore nodes. Protocol logic is pure-Python and unit
 ```
 org.fri3d.meshcore/          # the app payload — exactly what ships in the .mpk
   MANIFEST.JSON              # app manifest (launcher activity + boot_completed service)
-  metadata.json             # BadgeHub project descriptor
-  icon_64x64.png
+  icon_64x64.png            # the app icon (also what BadgeHub shows)
   meshcore.py               # UI (activities)
   meshcore_manager.py       # radio owner + background service (singleton)
   meshcore_packet.py        # packet parse/serialize
@@ -29,9 +28,8 @@ org.fri3d.meshcore/          # the app payload — exactly what ships in the .mp
   meshcore_dm.py            # direct-message + ack codec
   meshcore_boot_service.py  # boot_completed service (starts the radio if enabled)
 tests/                      # off-badge unit tests (desktop CPython)
-build_mpk.py                # build the .mpk (no external deps)
-publish_badgehub.py         # publish to BadgeHub via its API (used by CI)
-.github/workflows/release.yml   # tag vX.Y.Z -> build + publish
+build_mpk.py                # build the .mpk locally (no external deps)
+.github/workflows/release.yml   # tag vX.Y.Z -> build + publish (via the marketplace actions)
 ```
 
 ## Install
@@ -60,30 +58,39 @@ python3 build_mpk.py          # -> org.fri3d.meshcore_<version>.mpk
 
 ## Release
 
-Releases are automated and **the git tag is the version** — no files to edit. Pushing a
-`vX.Y.Z` tag runs `.github/workflows/release.yml`, which stamps `X.Y.Z` into `MANIFEST.JSON` +
-`metadata.json`, builds the `.mpk`, and publishes it to BadgeHub via `publish_badgehub.py`. The
-`BADGEHUB_API_TOKEN` repo secret is already configured.
-
-The BadgeHub **slug must equal the app fullname** (`org.fri3d.meshcore`): the AppStore takes
-the fullname from the slug, installs into `apps/<slug>`, and its unzipper rejects a `.mpk`
-whose top-level folder is anything else. The `.mpk` itself is what gets installed -- the loose
-files in the project are only there for browsing, so publishing without it makes the app
-un-installable ("Download failed").
+Releases are automated and **the git tag is the version** -- no files to edit. Pushing a
+`vX.Y.Z` tag runs `.github/workflows/release.yml`, which stamps `X.Y.Z` into `MANIFEST.JSON`,
+builds the `.mpk` with [`tjorim/mpos-package-mpk`](https://github.com/tjorim/mpos-package-mpk)
+and publishes it with
+[`tjorim/mpos-badgehub-publish`](https://github.com/tjorim/mpos-badgehub-publish).
 
 ```
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.4.5
+git push origin v0.4.5
 ```
 
-Use a **new** version each time (BadgeHub can't republish an existing one). The `version` fields
-committed in the repo are only a base for local builds / manual publish — CI overrides them from
-the tag.
+Use a **new** version each time (BadgeHub can't republish an existing one).
 
-Manual publish (fallback; uses the committed version):
+`MANIFEST.JSON` is the **single source** for `name`, `short_description`, `long_description`,
+`publisher` and `version` -- the publish action reads them from there. Only BadgeHub-specific
+fields (categories, badges, license, git URL, icon) are workflow inputs.
+
+Two things that are easy to get wrong and fail silently:
+
+- **The BadgeHub slug must equal the app fullname** (`org.fri3d.meshcore`). The AppStore takes
+  the app's fullname *from the slug*, installs into `apps/<slug>`, and its unzipper rejects a
+  `.mpk` whose single top-level folder is anything else.
+- **The `.mpk` must be uploaded.** BadgeHub does not bundle one for you: the AppStore scans the
+  project's files for one with a `.mpk`/`.zip` extension and downloads *that*. Publishing only
+  the loose sources gives users "Download failed".
+
+The `BADGEHUB_API_TOKEN` repo secret must be a token for **this** project; mint one with
+`POST https://badgehub.eu/api/v3/projects/org.fri3d.meshcore/token` while logged in to
+badgehub.eu.
+
+Build the package locally (for sideloading):
 ```
-python3 publish_badgehub.py --dry-run                 # show what would be uploaded
-BADGEHUB_API_TOKEN=... python3 publish_badgehub.py    # upload + publish the committed version
+python3 build_mpk.py          # -> org.fri3d.meshcore_<version>.mpk
 ```
 
 ## License & credits
