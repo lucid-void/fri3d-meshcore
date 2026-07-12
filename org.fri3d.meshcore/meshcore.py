@@ -40,6 +40,22 @@ def _dark(btn):
     return _focusable(btn)
 
 
+def _send_mark(m, ok_key):
+    """Delivery state of one of our own messages, as a trailing symbol.
+
+    ok_key is what counts as proof: a DM is "delivered" when the recipient's ack comes back;
+    a channel message is "confirmed" when we hear a repeater re-flood it (channels have no
+    acks). In between, a resend in flight shows the refresh symbol, and a message we gave up
+    on shows a cross."""
+    if m.get(ok_key):
+        return " " + lv.SYMBOL.OK
+    if m.get("failed"):
+        return " " + lv.SYMBOL.CLOSE
+    if m.get("attempt"):
+        return " " + lv.SYMBOL.REFRESH
+    return ""
+
+
 # --- chat rendering: the "unread" divider ---------------------------------- #
 # A chat is one big wrapped label, so the divider is a text line and "scroll to it" means
 # scrolling the message area to that line's y (which get_letter_pos gives us, wrapping and
@@ -722,8 +738,9 @@ class ChannelChatActivity(Activity):
 
     @staticmethod
     def _fmt(m):
-        who = ("me" if not m.get("incoming") else m.get("sender", "?"))
-        return "%s: %s" % (who, m.get("text", ""))
+        if m.get("incoming"):
+            return "%s: %s" % (m.get("sender", "?"), m.get("text", ""))
+        return "me: %s%s" % (m.get("text", ""), _send_mark(m, "confirmed"))
 
     def _render(self):
         mgr = MeshCoreManager.get_instance()
@@ -840,9 +857,7 @@ class DMChatActivity(Activity):
     def _fmt(m):
         if m.get("incoming"):
             return "%s: %s" % (m.get("sender", "?"), m.get("text", ""))
-        # tick once the recipient's ACK comes back (delivery confirmation)
-        mark = (" " + lv.SYMBOL.OK) if m.get("delivered") else ""
-        return "me: %s%s" % (m.get("text", ""), mark)
+        return "me: %s%s" % (m.get("text", ""), _send_mark(m, "delivered"))
 
     def _render(self):
         mgr = MeshCoreManager.get_instance()
