@@ -40,6 +40,44 @@ def _dark(btn):
     return _focusable(btn)
 
 
+# --- chat rendering: the "unread" divider ---------------------------------- #
+# A chat is one big wrapped label, so the divider is a text line and "scroll to it" means
+# scrolling the message area to that line's y (which get_letter_pos gives us, wrapping and
+# all). read_count is frozen when the chat opens, so the line stays put while you read.
+_UNREAD_LINE = "---------- new ----------"
+
+
+def _chat_text(msgs, read_count, fmt):
+    """Render message lines, with the divider after the first read_count messages.
+
+    Returns (text, divider_char) where divider_char is the character index the divider
+    line starts at, or -1 when there is no divider (nothing unread, or nothing read)."""
+    lines = []
+    divider = -1
+    for i, m in enumerate(msgs):
+        if i == read_count and 0 < i < len(msgs):
+            divider = sum(len(line) + 1 for line in lines)   # + the newlines
+            lines.append(_UNREAD_LINE)
+        lines.append(fmt(m))
+    return "\n".join(lines), divider
+
+
+def _show_chat(label, area, text, divider, scroll):
+    label.set_text(text)
+    if area is None:
+        return
+    try:
+        if divider < 0:
+            area.scroll_to_y(0x7FFFFFFF, False)     # all read: follow the newest (clamped)
+        elif scroll:
+            area.update_layout()                    # wrapping must be settled before we ask
+            pos = lv.point_t()
+            label.get_letter_pos(divider, pos)
+            area.scroll_to_y(max(0, pos.y - 4), False)
+    except Exception as e:
+        print("MeshCore: chat scroll skipped:", repr(e))
+
+
 class MeshCoreHome(Activity):
 
     def __init__(self):
@@ -637,7 +675,10 @@ class ChannelChatActivity(Activity):
         self.channel = "Public"
         self.manager = None
         self.messages = None
+        self.msg_area = None
         self.input_textarea = None
+        self._read_count = 0        # messages already read when this chat was opened
+        self._scroll_pending = False
         self._sub = None
 
     def onCreate(self):
@@ -657,6 +698,7 @@ class ChannelChatActivity(Activity):
         msg_area = lv.obj(main_content)
         msg_area.set_width(lv.pct(100))
         msg_area.set_flex_grow(1)
+        self.msg_area = msg_area
         self.messages = lv.label(msg_area)
         self.messages.set_text("No messages yet.")
         self.messages.set_long_mode(lv.label.LONG_MODE.WRAP)
@@ -678,20 +720,24 @@ class ChannelChatActivity(Activity):
 
         self.setContentView(main_content)
 
+    @staticmethod
+    def _fmt(m):
+        who = ("me" if not m.get("incoming") else m.get("sender", "?"))
+        return "%s: %s" % (who, m.get("text", ""))
+
     def _render(self):
         mgr = MeshCoreManager.get_instance()
         mgr.clear_unread(self.channel)      # showing the messages == reading them
         msgs = mgr.get_messages(self.channel)
         if not msgs:
-            text = "No messages yet."
+            text, divider = "No messages yet.", -1
         else:
-            lines = []
-            for m in msgs:
-                who = ("me" if not m.get("incoming") else m.get("sender", "?"))
-                lines.append("%s: %s" % (who, m.get("text", "")))
-            text = "\n".join(lines)
+            text, divider = _chat_text(msgs, self._read_count, self._fmt)
+        scroll = self._scroll_pending       # only jump to the divider on entry, then leave it
+        self._scroll_pending = False
         # marshal to the UI thread + skip if the chat is no longer foreground
-        self.update_ui_threadsafe_if_foreground(lambda: self.messages.set_text(text))
+        self.update_ui_threadsafe_if_foreground(
+            lambda: _show_chat(self.messages, self.msg_area, text, divider, scroll))
 
     def _send(self, event):
         if self.input_textarea is None:
@@ -707,6 +753,10 @@ class ChannelChatActivity(Activity):
         self.manager = MeshCoreManager.get_instance()
         if self.manager.is_service_enabled() and not self.manager.is_running():
             self.manager.start()
+        # freeze the read/unread boundary now, before _render() clears the unread count
+        unread = self.manager.get_unread(self.channel)
+        self._read_count = max(0, len(self.manager.get_messages(self.channel)) - unread)
+        self._scroll_pending = True
         self._render()
         self._sub = lambda ev, data: self._on_event(ev, data)
         self.manager.add_subscriber(self._sub)
@@ -731,6 +781,9 @@ class DMChatActivity(Activity):
         self.name = None
         self.manager = None
         self.messages = None
+        self.msg_area = None
+        self._read_count = 0        # messages already read when this chat was opened
+        self._scroll_pending = False
         self.input_textarea = None
         self.status = None
         self._sub = None
@@ -756,6 +809,7 @@ class DMChatActivity(Activity):
         msg_area = lv.obj(main_content)
         msg_area.set_width(lv.pct(100))
         msg_area.set_flex_grow(1)
+        self.msg_area = msg_area
         self.messages = lv.label(msg_area)
         self.messages.set_text("No messages yet.")
         self.messages.set_long_mode(lv.label.LONG_MODE.WRAP)
@@ -782,24 +836,27 @@ class DMChatActivity(Activity):
 
         self.setContentView(main_content)
 
+    @staticmethod
+    def _fmt(m):
+        if m.get("incoming"):
+            return "%s: %s" % (m.get("sender", "?"), m.get("text", ""))
+        # tick once the recipient's ACK comes back (delivery confirmation)
+        mark = (" " + lv.SYMBOL.OK) if m.get("delivered") else ""
+        return "me: %s%s" % (m.get("text", ""), mark)
+
     def _render(self):
         mgr = MeshCoreManager.get_instance()
         mgr.clear_unread(self.pubkey)       # showing the messages == reading them
         msgs = mgr.get_dm_messages(self.pubkey)
         if not msgs:
-            text = "No messages yet."
+            text, divider = "No messages yet.", -1
         else:
-            lines = []
-            for m in msgs:
-                if m.get("incoming"):
-                    lines.append("%s: %s" % (m.get("sender", "?"), m.get("text", "")))
-                else:
-                    # tick once the recipient's ACK comes back (delivery confirmation)
-                    mark = (" " + lv.SYMBOL.OK) if m.get("delivered") else ""
-                    lines.append("me: %s%s" % (m.get("text", ""), mark))
-            text = "\n".join(lines)
+            text, divider = _chat_text(msgs, self._read_count, self._fmt)
+        scroll = self._scroll_pending       # only jump to the divider on entry, then leave it
+        self._scroll_pending = False
         # marshal to the UI thread + skip if the chat is no longer foreground
-        self.update_ui_threadsafe_if_foreground(lambda: self.messages.set_text(text))
+        self.update_ui_threadsafe_if_foreground(
+            lambda: _show_chat(self.messages, self.msg_area, text, divider, scroll))
 
     def _send(self, event):
         if self.input_textarea is None or not self.pubkey:
@@ -828,6 +885,10 @@ class DMChatActivity(Activity):
         self.manager = MeshCoreManager.get_instance()
         if self.manager.is_service_enabled() and not self.manager.is_running():
             self.manager.start()
+        # freeze the read/unread boundary now, before _render() clears the unread count
+        unread = self.manager.get_unread(self.pubkey)
+        self._read_count = max(0, len(self.manager.get_dm_messages(self.pubkey)) - unread)
+        self._scroll_pending = True
         self._render()
         self._sub = lambda ev, data: self._on_event(ev, data)
         self.manager.add_subscriber(self._sub)
