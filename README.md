@@ -27,6 +27,7 @@ org.fri3d.meshcore/          # the app payload — exactly what ships in the .mp
   meshcore_advert.py        # advert parse/build + share URIs
   meshcore_dm.py            # direct-message + ack codec
   meshcore_boot_service.py  # boot_completed service (starts the radio if enabled)
+  fonts/                    # Archivo Narrow (OFL), the chat font — see below
 tests/                      # off-badge unit tests (desktop CPython)
 build_mpk.py                # build the .mpk locally (no external deps)
 .github/workflows/release.yml   # tag vX.Y.Z -> build + publish (via the marketplace actions)
@@ -111,6 +112,12 @@ Adapts / interoperates with these MIT-licensed works (full notices in
 - **[meshcore-pi](https://github.com/brianwiddas/meshcore-pi)** © Brian Widdas — X25519 + identity crypto, reference impl.
 - **[MeshCore](https://github.com/ripplebiz/MeshCore)** © Scott Powell — protocol / wire-format
   reference, and the wordmark the app icon is derived from (see FAQ 7.4).
+
+The chat font is **[Archivo Narrow](https://github.com/Omnibus-Type/ArchivoNarrow)** © The
+Archivo Narrow Project Authors, used under the **SIL Open Font License 1.1** — not MIT (the
+licence ships with the font at `org.fri3d.meshcore/fonts/OFL.txt`, as the OFL requires). It is
+the upstream Regular, subset to Latin-1 so it costs 17 KB of badge flash instead of 91 KB, and
+it fits ~57 characters on a chat line where LVGL's built-in Montserrat fits 42.
 
 MESHCORE is a trademark of its owner. This is an independent, community-built client; it is not
 affiliated with or endorsed by the MeshCore project.

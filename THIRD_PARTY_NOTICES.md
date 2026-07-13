@@ -1,8 +1,9 @@
 # Third-party notices
 
-This app adapts and interoperates with the following third-party works. Each is used under
-the MIT License; the original copyright notices are reproduced below, followed by the MIT
-license text (identical for all three).
+This app adapts and interoperates with the following third-party works. The three code and
+reference works are each used under the MIT License; their original copyright notices are
+reproduced below, followed by the MIT license text (identical for all three). The bundled
+font is used under the SIL Open Font License 1.1.
 
 ## python-pure25519
 Copyright (c) 2015 Brian Warner and contributors
@@ -34,6 +35,19 @@ MeshCore FAQ (7.4) makes available for use. The letterforms are the original one
 between the "H" and the "C" and stacked to fit a square icon; nothing was redrawn or
 re-typeset. MESHCORE is a trademark of its owner: this app is an independent, community-built
 client and is not affiliated with or endorsed by the MeshCore project.
+
+## Archivo Narrow
+Copyright 2019 The Archivo Narrow Project Authors
+https://github.com/Omnibus-Type/ArchivoNarrow
+
+Licensed under the SIL Open Font License, Version 1.1 -- **not** the MIT License that covers
+the rest of this app. The full text ships with the font at
+`org.fri3d.meshcore/fonts/OFL.txt`, as the OFL requires.
+
+`org.fri3d.meshcore/fonts/ArchivoNarrow-Regular.ttf` is the upstream Regular (v3.002),
+subset to Latin-1 plus common punctuation so it costs 17 KB instead of 91 KB on badge flash.
+The OFL permits this: the font carries no Reserved Font Name, so the modified copy may keep
+the family name. It is bundled and rendered, never sold on its own.
 
 ---
 
