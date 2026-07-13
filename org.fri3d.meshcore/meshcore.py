@@ -19,7 +19,8 @@
 import os
 import lvgl as lv
 
-from mpos import (Activity, Intent, MposKeyboard, InputActivity, DisplayMetrics, FontManager)
+from mpos import (Activity, Intent, MposKeyboard, InputActivity, DisplayMetrics, FontManager,
+                  add_focus_border)
 
 from meshcore_manager import MeshCoreManager
 
@@ -53,9 +54,29 @@ def _load_narrow_font():
     return _NARROW_FONT
 
 
+_outline_warned = False
+
+
 def _focusable(obj):
-    """Tag a widget as one of ours, so _sync_tab_focus() can park it (see there)."""
+    """Tag a widget as one of ours (so _sync_tab_focus() can park it) and give it a focus
+    ring that our layout cannot eat.
+
+    The theme marks focus with an OUTLINE, which LVGL draws OUTSIDE the widget's box -- and a
+    list row is exactly as big as the buttons in it, so the ring lands outside the row and is
+    clipped away: nothing at all on a full-width row (Public), and just the one curved edge
+    that fits in the 6px gap next to the trash button (")") on the others. A BORDER is drawn
+    inside the widget, so nothing can clip it; add_focus_border also keeps the highlight off
+    touch-only use until the joystick is actually moved."""
+    global _outline_warned
     obj.add_flag(lv.obj.FLAG.USER_1)
+    try:
+        obj.set_style_outline_width(0, lv.PART.MAIN | lv.STATE.FOCUS_KEY)
+        obj.set_style_outline_width(0, lv.PART.MAIN | lv.STATE.FOCUSED)
+    except Exception as e:                       # keep the (clipped) outline over no app
+        if not _outline_warned:
+            _outline_warned = True
+            print("MeshCore: could not drop the theme focus outline:", repr(e))
+    add_focus_border(obj, width=2)
     return obj
 
 
