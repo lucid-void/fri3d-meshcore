@@ -32,15 +32,23 @@ _BADGE_BG = 0xC0392B
 _NARROW_FONT = None
 
 def _load_narrow_font():
-    """Load a narrow font for chat messages. Cache it."""
+    """Chat messages in a narrow face: ~57 characters per line instead of Montserrat's 42.
+
+    Archivo Narrow (OFL 1.1, subset to Latin-1 -- see fonts/OFL.txt), rendered by tiny_ttf.
+    """
     global _NARROW_FONT
     if _NARROW_FONT is None:
         try:
             mydir = os.path.dirname(os.path.abspath(__file__))
-            _NARROW_FONT = FontManager.getFont(size=14,
-                                             ttf=f"M:{mydir}/fonts/NimbusSansNarrow-Regular.ttf")
-        except Exception:
-            # Fall back to a built-in font if the TTF isn't available.
+            font = FontManager.getFont(size=14,
+                                       ttf=f"M:{mydir}/fonts/ArchivoNarrow-Regular.ttf")
+            # The send marks in a chat line (lv.SYMBOL.OK / CLOSE / REFRESH) are FontAwesome
+            # glyphs from LVGL's private-use range -- no text font has them. Without this
+            # fallback every message renders its delivery tick as an empty box.
+            font.fallback = lv.font_montserrat_14
+            _NARROW_FONT = font
+        except Exception as e:
+            print("MeshCore: narrow font unavailable, using montserrat:", repr(e))
             _NARROW_FONT = lv.font_montserrat_14
     return _NARROW_FONT
 
