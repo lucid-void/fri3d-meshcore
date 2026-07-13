@@ -1,56 +1,91 @@
 name: Release to BadgeHub
 
-# Tag a release as vX.Y.Z (matching the version in MANIFEST.JSON + metadata.json) and push
-# the tag; this builds the .mpk (as an artifact) and publishes the app to BadgeHub via its API.
+# Push a vX.Y.Z tag and this builds the .mpk and publishes the app to BadgeHub.
+# The TAG is the version: it is stamped into MANIFEST.JSON, which is the single source for
+# name / description / long_description / author / version (tjorim/mpos-badgehub-publish reads
+# them from there). Only BadgeHub-specific fields are inputs below.
 #
-# Requires repo secret BADGEHUB_API_TOKEN (a BadgeHub project API token for the `meshcore`
-# project). Settings -> Secrets and variables -> Actions -> New repository secret.
+# Requires the repo secret BADGEHUB_API_TOKEN: an API token for THIS project, minted with
+#   POST https://badgehub.eu/api/v3/projects/org.fri3d.meshcore/token   (while logged in)
 
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
+permissions:
+  contents: read
+
+concurrency:                 # two tags racing would fight over the same BadgeHub draft
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  # Never publish something that has not been tested: same tests + bundle checks as CI.
+  check:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
+      - uses: actions/checkout@v7
 
       - name: Derive version from tag (strip leading v)
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Stamp the tag version into MANIFEST + metadata
+      # BadgeHub cannot republish a version that already exists, and the publish step is the
+      # LAST one -- so without this you find out after building and uploading everything.
+      - name: Fail fast if this version is already published
+        run: |
+          published=$(curl -sf -H 'User-Agent: meshcore-ci' \
+            "https://badgehub.eu/api/v3/projects/org.fri3d.meshcore" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['version']['app_metadata']['version'])" \
+            || echo "none")
+          echo "currently published: $published, releasing: $VERSION"
+          if [ "$published" = "$VERSION" ]; then
+            echo "::error::$VERSION is already published -- tag a new version"
+            exit 1
+          fi
+
+      - name: Stamp the tag version into the MANIFEST
         run: |
           set -e
-          for f in org.fri3d.meshcore/MANIFEST.JSON org.fri3d.meshcore/metadata.json; do
-            sed -i -E 's/("version"[[:space:]]*:[[:space:]]*")[0-9]+\.[0-9]+\.[0-9]+(")/\1'"$VERSION"'\2/' "$f"
-            python3 -c "import json; assert json.load(open('$f'))['version']=='$VERSION', 'version not stamped in $f'"
-          done
-          echo "stamped version $VERSION into manifest + metadata"
+          f=org.fri3d.meshcore/MANIFEST.JSON
+          sed -i -E 's/("version"[[:space:]]*:[[:space:]]*")[0-9]+\.[0-9]+\.[0-9]+(")/\1'"$VERSION"'\2/' "$f"
+          python3 -c "import json; assert json.load(open('$f'))['version'] == '$VERSION', 'version not stamped into $f'"
+          echo "stamped version $VERSION"
 
-      - name: Build .mpk artifact
-        run: python3 build_mpk.py
+      - name: Build the .mpk
+        id: package
+        uses: tjorim/mpos-package-mpk@v1.0.2
+        with:
+          app-dir: org.fri3d.meshcore
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mpk
-          path: '*.mpk'
+          path: ${{ steps.package.outputs.mpk-path }}
           if-no-files-found: error
 
-      - name: Install publisher deps
-        run: pip install requests
-
-      # Uploads the sources + the .mpk (the AppStore installs the .mpk), then publishes and
-      # verifies the .mpk is in the published revision. BADGEHUB_SLUG must equal the app
-      # fullname -- the AppStore installs into apps/<slug> and rejects a .mpk whose top-level
-      # folder is anything else.
+      # Uploads the sources + the .mpk (the AppStore installs the .mpk -- BadgeHub does not
+      # bundle one for you) and registers the icon, each part with its real MIME type.
+      # Pinned, NOT @v1: the moving v1 tag predates the mpk-path input, so it silently drops
+      # the .mpk (just a warning) and publishes an app the AppStore cannot download.
       - name: Publish to BadgeHub
-        env:
-          BADGEHUB_API_TOKEN: ${{ secrets.BADGEHUB_API_TOKEN }}
-          BADGEHUB_SLUG: org.fri3d.meshcore
-        run: python3 publish_badgehub.py --version "$VERSION"
+        uses: tjorim/mpos-badgehub-publish@v1.0.11
+        with:
+          slug: org.fri3d.meshcore        # must equal the MANIFEST fullname: the AppStore
+          app-dir: org.fri3d.meshcore     # installs into apps/<slug> and rejects a .mpk whose
+          icon: icon_64x64.png            # top-level folder is anything else
+          mpk-path: ${{ steps.package.outputs.mpk-path }}
+          api-token: ${{ secrets.BADGEHUB_API_TOKEN }}
+          categories: Communication
+          badges: mpos_api_0
+          license-type: MIT
+          git-url: https://github.com/lucid-void/fri3d-meshcore
+
+      # Publishing succeeds whether or not the thing a badge actually downloads is there: a
+      # green release once shipped an app nobody could install. Ask the store, not the log.
+      - name: Verify the release is installable
+        run: python3 tools/verify_release.py org.fri3d.meshcore "$VERSION"

@@ -260,6 +260,21 @@ class Channel:
         key_len = 16 if self.secret[16:32] == b"\x00" * 16 else 32
         self.hash = hashlib.sha256(self.secret[:key_len]).digest()[0]
 
+    @property
+    def kind(self):
+        """MeshCore has three kinds of group channel, and they differ in how you JOIN them:
+
+        "public"   -- the one every node ships with: a well-known PSK, named "Public".
+        "hashtag"  -- a public #name channel. There is no key to exchange: it is DERIVED
+                      from the name (sha256("#" + name)[:16]), so anyone who knows the name
+                      is in. This is what #fri3dcamp is.
+        "private"  -- a name plus a shared 128-bit key (base64) that you must pass around
+                      out of band. The name says nothing about the key.
+        """
+        if self.psk_b64 == PUBLIC_GROUP_PSK_B64:
+            return "public"
+        return "hashtag" if self.name.startswith("#") else "private"
+
     @classmethod
     def from_psk_base64(cls, name, psk_b64):
         return cls(name, _derive_secret(psk_b64), psk_b64=psk_b64)

@@ -71,6 +71,10 @@ RETRY_AFTER_MS = 15000      # no ack (DM) / no repeater echo (channel) within th
 DM_MAX_SENDS = 4            # attempts 0..3 -- MeshCore keeps the attempt in 2 bits
 CH_MAX_SENDS = 3
 
+# Seeded into every fresh install alongside "Public" -- a hashtag channel, so there is no key
+# to hand out: everyone who knows the name derives the same one. Removable like any other.
+DEFAULT_CHANNEL = "fri3dcamp"
+
 MESHCORE_APP = "org.fri3d.meshcore"
 NICKNAME_PREFS = MESHCORE_APP
 
@@ -122,6 +126,7 @@ class MeshCoreManager:
         self._repeater_heard = False             # heard a packet that travelled via a repeater
         self._recent = {}                        # (msg key) -> timestamp, to spot resends
         self._recent_order = []                  # key FIFO, to cap _recent
+        self._keygen_running = False             # a first-run keygen thread is working
         self._bringup_in_progress = False        # guard: one radio bring-up thread at a time
         self._secrets_thread_running = False     # guard: one contact-secret precompute thread
         self._dirty_history = set()              # contact pubkey_hex with unsaved DM history
@@ -133,6 +138,7 @@ class MeshCoreManager:
         self._tx_count = 0                        # packets transmitted this session
         self._reinit_count = 0                    # radio re-inits (wedge recoveries)
         self._load_channels()
+        self._seed_default_channels()
         self._load_contacts()
 
     def is_running(self):
@@ -211,10 +217,23 @@ class MeshCoreManager:
     def nickname(self):
         try:
             from mpos import SharedPreferences
-            n = SharedPreferences(NICKNAME_PREFS).get_string("nickname", "badge")
-            return n or "badge"
+            n = SharedPreferences(NICKNAME_PREFS).get_string("nickname", "")
+            if n:
+                return n
         except Exception:
+            pass
+        return self.default_nickname()
+
+    def default_nickname(self):
+        """badge_<first 4 hex of the public key>, so two badges are never the same node name.
+
+        The public key is already the node's identity, so its first bytes are as good a
+        unique tag as any -- and 'badge_d5e4' matches the node id you see on the air (the
+        first byte of that same key)."""
+        pub, _ = self.get_identity()
+        if pub is None:
             return "badge"
+        return "badge_%s" % pub.hex()[:4]
 
     def set_nickname(self, name):
         name = (name or "").strip()
@@ -275,8 +294,54 @@ class MeshCoreManager:
             print("MeshCore: identity generated, node id 0x%02x" % pub[0])
         except Exception as e:
             print("MeshCore: save identity error:", repr(e))
+        self._name_from_identity(pub)
         self._notify("identity", pub)
         return pub
+
+    def _name_from_identity(self, pub):
+        """Give an unnamed node a name derived from its brand-new key (badge_d5e4)."""
+        try:
+            from mpos import SharedPreferences
+            current = SharedPreferences(NICKNAME_PREFS).get_string("nickname", "")
+        except Exception:
+            current = ""
+        if current and current != "badge":      # the user picked a name -- leave it alone
+            return
+        name = "badge_%s" % pub.hex()[:4]
+        if self.set_nickname(name):
+            print("MeshCore: node named %s" % name)
+            self._notify("nickname", name)
+
+    def is_keygen_running(self):
+        return self._keygen_running
+
+    def ensure_identity(self):
+        """First start with no keypair -> generate one (and a name from it) in the background.
+
+        Pure-Python Ed25519 keygen takes seconds, so it must not block the caller: start()
+        is called from the boot service and from the app, and both should just carry on."""
+        if self._keygen_running or self.has_identity():
+            return False
+        self._keygen_running = True
+        print("MeshCore: no identity yet -- generating one (first start)")
+        try:
+            import _thread
+            try:
+                from mpos import TaskManager
+                _thread.stack_size(TaskManager.good_stack_size())
+            except Exception:
+                pass
+            _thread.start_new_thread(self._keygen_thread, ())
+        except Exception as e:
+            print("MeshCore: could not start keygen thread:", repr(e))
+            self._keygen_thread()
+        return True
+
+    def _keygen_thread(self):
+        try:
+            self.generate_identity()
+        finally:
+            self._keygen_running = False
 
     def contact_uri(self):
         """meshcore:// contact card for this node, to render as a QR. None if no identity."""
@@ -372,6 +437,37 @@ class MeshCoreManager:
             except Exception as e:
                 print("MeshCore: skipping bad saved channel %r: %s" % (entry, e))
 
+    def _seed_default_channels(self):
+        """First run: join #fri3dcamp, so every badge is on the camp channel out of the box.
+
+        Guarded by a flag rather than "is it missing?", so that deleting it makes it stay
+        deleted instead of coming back on the next boot."""
+        try:
+            from mpos import SharedPreferences
+            p = SharedPreferences(NICKNAME_PREFS)
+            if p.get_bool("channels_seeded", False):
+                return
+        except Exception as e:
+            print("MeshCore: seed check error:", repr(e))
+            return
+        if self.get_channel("#" + DEFAULT_CHANNEL) is None:
+            ch = Channel.from_hashtag_name(DEFAULT_CHANNEL)
+            self._channels.append(ch)
+            self._messages.setdefault(ch.name, [])
+            self._save_channels()
+            print("MeshCore: joined #%s (default channel)" % DEFAULT_CHANNEL)
+        try:
+            from mpos import SharedPreferences
+            ed = SharedPreferences(NICKNAME_PREFS).edit()
+            ed.put_bool("channels_seeded", True)
+            ed.commit()
+        except Exception as e:
+            print("MeshCore: seed flag error:", repr(e))
+
+    def channel_kind(self, name):
+        ch = self.get_channel(name)
+        return ch.kind if ch is not None else "hashtag"
+
     def _save_channels(self):
         try:
             from mpos import SharedPreferences
@@ -425,6 +521,7 @@ class MeshCoreManager:
             print("MeshCoreManager: already running")
             return
         self._running = True
+        self.ensure_identity()     # first start: mint a keypair + a name, off-thread
         if simulation_mode:
             self._ensure_worker()
             self._start_simulation()

@@ -1,1 +1,32 @@
-{"name": "MeshCore", "publisher": "lucid-void", "short_description": "MeshCore LoRa mesh client", "long_description": "A MeshCore client over LoRa: companions, public # channels, and encrypted direct messages with contacts. Toggle the background radio service on/off from the Me tab.", "fullname": "org.fri3d.meshcore", "version": "0.4.0", "category": "communication", "activities": [{"entrypoint": "meshcore.py", "classname": "MeshCoreHome", "intent_filters": [{"action": "main", "category": "launcher"}]}], "services": [{"entrypoint": "meshcore_boot_service.py", "classname": "MeshCoreBootService", "intent_filters": [{"action": "boot_completed"}]}]}
+{
+  "name": "MeshCore",
+  "publisher": "lucid-void",
+  "short_description": "MeshCore LoRa mesh client",
+  "long_description": "A MeshCore client over LoRa for the Fri3d Camp 2026 badge (MicroPythonOS). Learns companion nodes from adverts; add one as a contact to exchange encrypted direct messages (X25519 + AES-128 + HMAC) with delivery acknowledgements. Send and receive public # channel messages, interoperable with the MeshCore apps. Generates an on-device Ed25519 identity, floods signed adverts, and shares your contact as a QR. A Me-tab toggle runs the LoRa node in the background (receiving while the app is closed) with automatic radio recovery. By lucid-void. An independent, community-built client: not affiliated with or endorsed by the MeshCore project. MESHCORE is a trademark of its owner.",
+  "fullname": "org.fri3d.meshcore",
+  "version": "0.4.0",
+  "category": "communication",
+  "activities": [
+    {
+      "entrypoint": "meshcore.py",
+      "classname": "MeshCoreHome",
+      "intent_filters": [
+        {
+          "action": "main",
+          "category": "launcher"
+        }
+      ]
+    }
+  ],
+  "services": [
+    {
+      "entrypoint": "meshcore_boot_service.py",
+      "classname": "MeshCoreBootService",
+      "intent_filters": [
+        {
+          "action": "boot_completed"
+        }
+      ]
+    }
+  ]
+}

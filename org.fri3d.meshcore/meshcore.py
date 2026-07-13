@@ -64,6 +64,17 @@ def _dark(btn):
     return _focusable(btn)
 
 
+def _channel_label(name, kind):
+    """How a channel shows up in the list.
+
+    The name already carries its own marking -- a hashtag channel IS "#name" -- so the list
+    must not add another "#" (that is where the "# #test" came from). A private channel has
+    no "#" (its key is not derivable from the name), so it gets a closed-eye instead."""
+    if kind == "private":
+        return lv.SYMBOL.EYE_CLOSE + " " + name
+    return name
+
+
 def _send_mark(m, ok_key):
     """Delivery state of one of our own messages, as a trailing symbol.
 
@@ -293,9 +304,10 @@ class MeshCoreHome(Activity):
         yb = mbox.add_footer_button(yes)
         yb.add_event_cb(lambda e: (self._close_mbox(mbox), _restore(), on_yes()),
                         lv.EVENT.CLICKED, None)
-        nb = mbox.add_footer_button(no)
-        nb.add_event_cb(lambda e: (self._close_mbox(mbox), _restore()),
-                        lv.EVENT.CLICKED, None)
+        if no:                                  # omit for a plain "OK" notice
+            nb = mbox.add_footer_button(no)
+            nb.add_event_cb(lambda e: (self._close_mbox(mbox), _restore()),
+                            lv.EVENT.CLICKED, None)
 
     # --- Channels tab ------------------------------------------------------- #
     def _build_channels_tab(self, tab):
@@ -312,13 +324,13 @@ class MeshCoreHome(Activity):
         m = MeshCoreManager.get_instance()
         for name in m.get_channel_names():
             on_del = None if name == "Public" else (lambda n=name: self._ask_delete_channel(n))
-            self._list_row(self.channels_list, "# " + name,
+            self._list_row(self.channels_list, _channel_label(name, m.channel_kind(name)),
                            lambda n=name: self._open_channel(n), on_del,
                            badge=m.get_unread(name))
         self._sync_tab_focus()
 
     def _ask_delete_channel(self, name):
-        self._confirm("Delete channel #%s?" % name,
+        self._confirm("Delete channel %s?" % name,
                       lambda: self._do_remove_channel(name), yes="Delete")
 
     def _do_remove_channel(self, name):
@@ -329,25 +341,22 @@ class MeshCoreHome(Activity):
         self.startActivity(Intent(activity_class=ChannelChatActivity, extras={"channel": name}))
 
     def _prompt_add_channel(self):
-        setting = {"key": "channel", "title": "Add channel", "ui": "textarea",
-                   "placeholder": "name = public #name   (name|base64key = private)"}
-        self.startActivityForResult(
-            Intent(activity_class=InputActivity, extras={"setting": setting}),
-            self._on_add_channel)
+        self.startActivityForResult(Intent(activity_class=AddChannelActivity),
+                                    self._on_add_channel)
 
     def _on_add_channel(self, result):
         if not result or not result.get("result_code"):
             return
-        value = result.get("data", {}).get("value", "").strip()
-        if not value:
+        data = result.get("data", {})
+        name = (data.get("name") or "").strip()
+        key = (data.get("key") or "").strip()
+        if not name:
             return
-        # "name|psk" joins an existing channel; a bare "name" creates a new one.
-        if "|" in value:
-            name, psk = value.split("|", 1)
-        else:
-            name, psk = value, ""
-        ok, err = MeshCoreManager.get_instance().add_channel(name.strip(), psk.strip())
-        print("MeshCore: add_channel(%r) -> ok=%s err=%s" % (name.strip(), ok, err))
+        ok, err = MeshCoreManager.get_instance().add_channel(name, key)
+        print("MeshCore: add_channel(%r, key=%s) -> ok=%s err=%s"
+              % (name, "yes" if key else "no (public #channel)", ok, err))
+        if not ok:
+            self._confirm("Could not add it:\n%s" % err, lambda: None, yes="OK", no="")
         lv.async_call(lambda _: self._refresh_channels(), None)
 
     # --- Companions tab (learned nodes; tap to add as contact) -------------- #
@@ -511,6 +520,10 @@ class MeshCoreHome(Activity):
 
         self._refresh_identity()
 
+    def _refresh_name(self):
+        if self.name_label is not None:
+            self.name_label.set_text("Name: " + MeshCoreManager.get_instance().nickname())
+
     def _refresh_identity(self):
         if self.identity_label is None:
             return
@@ -524,6 +537,13 @@ class MeshCoreHome(Activity):
             self.backup_id_btn.remove_flag(lv.obj.FLAG.HIDDEN)
             self.advert_btn.remove_flag(lv.obj.FLAG.HIDDEN)
             self.share_qr_btn.remove_flag(lv.obj.FLAG.HIDDEN)
+        elif m.is_keygen_running() or self._keygen_busy:
+            self.identity_label.set_text("Generating identity...\n(first start -- takes a while)")
+            self.gen_id_btn.add_flag(lv.obj.FLAG.HIDDEN)
+            self.backup_id_btn.add_flag(lv.obj.FLAG.HIDDEN)
+            self.advert_btn.add_flag(lv.obj.FLAG.HIDDEN)
+            self.share_qr_btn.add_flag(lv.obj.FLAG.HIDDEN)
+            return
         else:
             self.identity_label.set_text("Identity: not generated")
             self.gen_id_btn.remove_flag(lv.obj.FLAG.HIDDEN)
@@ -665,6 +685,7 @@ class MeshCoreHome(Activity):
         if self.manager.is_service_enabled() and not self.manager.is_running():
             print("MeshCoreHome: service enabled, starting manager")
             self.manager.start()
+        self.manager.ensure_identity()   # first start (radio off too): mint a key + a name
         self._refresh_channels()
         self._refresh_nodes()
         self._refresh_dms()
@@ -694,7 +715,10 @@ class MeshCoreHome(Activity):
         elif event == "channels":
             self.update_ui_threadsafe_if_foreground(self._refresh_channels)
         elif event == "identity":
-            self.update_ui_threadsafe_if_foreground(lambda: (self._refresh_identity(), self._refresh_dms()))
+            self.update_ui_threadsafe_if_foreground(
+                lambda: (self._refresh_identity(), self._refresh_name(), self._refresh_dms()))
+        elif event == "nickname":
+            self.update_ui_threadsafe_if_foreground(self._refresh_name)
         elif event == "contacts":
             self.update_ui_threadsafe_if_foreground(lambda: (self._refresh_nodes(), self._refresh_dms()))
         elif event == "dm":
@@ -731,7 +755,7 @@ class ChannelChatActivity(Activity):
         main_content.set_style_pad_gap(8, 0)
 
         title = lv.label(main_content)
-        title.set_text("# " + self.channel)
+        title.set_text(self.channel)        # the name already carries its own "#", if any
         title.set_style_text_font(lv.font_montserrat_16, lv.PART.MAIN)
 
         # scrollable message area
@@ -746,7 +770,7 @@ class ChannelChatActivity(Activity):
         self.messages.set_width(lv.pct(100))
 
         self.input_textarea = lv.textarea(main_content)
-        self.input_textarea.set_placeholder_text("Message #%s..." % self.channel)
+        self.input_textarea.set_placeholder_text("Message %s..." % self.channel)
         self.input_textarea.set_one_line(True)
         self.input_textarea.set_width(lv.pct(100))
 
@@ -941,6 +965,105 @@ class DMChatActivity(Activity):
     def _on_event(self, event, data):
         if event == "dm" and data and data[0] == self.pubkey:
             self._render()   # _render marshals to the UI thread + foreground-guards itself
+
+
+class AddChannelActivity(Activity):
+    """Add a channel: a name, and a key you only fill in for a private one.
+
+    The two are not independent -- they are what decides which KIND of channel you get:
+
+      name only          -> a public "#name" channel. Nothing to exchange: the key is
+                            derived from the name (sha256("#name")), so everyone who types
+                            the same name lands on the same channel. This is #fri3dcamp.
+      name + a key       -> a private channel. The key is a shared 128-bit secret in base64
+                            that has to be passed around out of band; the name is just a
+                            label and says nothing about the key.
+
+    Returns {"name": ..., "key": ...} -- an empty key means "public #channel".
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.name_ta = None
+        self.key_ta = None
+        self.keyboard = None
+
+    def onCreate(self):
+        screen = lv.obj()
+        screen.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+        screen.set_style_pad_all(8, 0)
+        screen.set_style_pad_gap(4, 0)
+
+        title = lv.label(screen)
+        title.set_text("New channel")
+        title.set_style_text_font(lv.font_montserrat_16, lv.PART.MAIN)
+
+        self.name_ta = self._field(screen, "Name", "fri3dcamp")
+        self.key_ta = self._field(screen, "Key (private channels only)",
+                                  "leave empty for a public #channel")
+
+        note = lv.label(screen)
+        note.set_text("No key = a public #channel: the key comes from the name, so anyone "
+                      "who knows the name can join. A key (base64) makes it private.")
+        note.set_long_mode(lv.label.LONG_MODE.WRAP)
+        note.set_width(lv.pct(100))
+        note.set_style_text_font(lv.font_montserrat_12, lv.PART.MAIN)
+
+        row = lv.obj(screen)
+        row.set_width(lv.pct(100))
+        row.set_height(lv.SIZE_CONTENT)
+        row.set_flex_flow(lv.FLEX_FLOW.ROW)
+        row.set_style_pad_all(0, 0)
+        row.set_style_pad_gap(8, 0)
+        row.set_style_border_width(0, 0)
+        row.set_style_bg_opa(lv.OPA.TRANSP, 0)
+
+        add = _dark(lv.button(row))
+        add.set_flex_grow(1)
+        add.add_event_cb(lambda e: self._add(), lv.EVENT.CLICKED, None)
+        lv.label(add).set_text(lv.SYMBOL.OK + " Add")
+
+        cancel = _dark(lv.button(row))     # a normal button: the framework's own Cancel is
+        cancel.set_flex_grow(1)            # drawn at 70% opacity and reads as disabled
+        cancel.add_event_cb(lambda e: self._cancel(), lv.EVENT.CLICKED, None)
+        lv.label(cancel).set_text("Cancel")
+
+        self.keyboard = MposKeyboard(screen)
+        self.keyboard.set_textarea(self.name_ta)
+
+        self.setContentView(screen)
+
+    def _field(self, parent, label, placeholder):
+        lbl = lv.label(parent)
+        lbl.set_text(label)
+        lbl.set_style_text_font(lv.font_montserrat_12, lv.PART.MAIN)
+        ta = lv.textarea(parent)
+        ta.set_one_line(True)
+        ta.set_width(lv.pct(100))
+        ta.set_placeholder_text(placeholder)
+        # one keyboard, retargeted at whichever field you are in
+        ta.add_event_cb(lambda e, t=ta: self._focus(t), lv.EVENT.FOCUSED, None)
+        ta.add_event_cb(lambda e, t=ta: self._focus(t), lv.EVENT.CLICKED, None)
+        return ta
+
+    def _focus(self, ta):
+        try:
+            self.keyboard.set_textarea(ta)
+        except Exception as e:
+            print("AddChannel: keyboard retarget failed:", repr(e))
+
+    def _add(self):
+        name = (self.name_ta.get_text() or "").strip()
+        key = (self.key_ta.get_text() or "").strip()
+        if not name:
+            self._cancel()
+            return
+        self.setResult(True, {"name": name, "key": key})
+        self.finish()
+
+    def _cancel(self):
+        self.setResult(False, {})
+        self.finish()
 
 
 class ShareQRActivity(Activity):

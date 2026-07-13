@@ -1,0 +1,22 @@
+version: 2
+
+# Keep the release actions on their latest version -- but as a PR, not silently.
+#
+# The alternatives both bit us. The moving `v1` tag went stale: it still pointed at a build
+# that predated both the `mpk-path` input and the User-Agent fix, so it dropped the .mpk with
+# only a warning (an app nobody can install, published green) and got 403'd by Cloudflare.
+# And `@main` would run whatever was pushed upstream minutes ago -- with our BadgeHub token in
+# the environment -- on every release.
+#
+# So: exact pins, and Dependabot opens a PR for each new version. CI (tests + bundle checks)
+# runs on that PR, so an upstream change has to pass before it can touch a release.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "CI"
+    groups:
+      actions:            # one PR for all action bumps, not one per action
+        patterns: ["*"]

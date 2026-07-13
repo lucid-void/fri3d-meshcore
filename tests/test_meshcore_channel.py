@@ -142,6 +142,36 @@ def test_hashtag_channel_build_and_roundtrip():
     _assert(ch2.hash == ch.hash and ch2.aes_key == ch.aes_key)
 
 
+def test_channel_kinds():
+    """The three kinds differ in how you JOIN them, which is what the UI must show."""
+    from meshcore_channel import PUBLIC_CHANNEL
+    _assert(PUBLIC_CHANNEL.kind == "public", "the shipped channel is the public one")
+    _assert(PUBLIC_CHANNEL.name == "Public", "and it is not a #channel")
+
+    tag = Channel.from_hashtag_name("fri3dcamp")
+    _assert(tag.kind == "hashtag")
+    _assert(tag.name == "#fri3dcamp", "a hashtag channel carries its own '#' in the name")
+    _assert(Channel.from_hashtag_name("#fri3dcamp").name == "#fri3dcamp", "'#' is idempotent")
+
+    import binascii
+    psk = binascii.b2a_base64(bytes(range(16))).decode().strip()
+    priv = Channel.from_psk_base64("secret room", psk)
+    _assert(priv.kind == "private", "a name + its own key is a private channel")
+    _assert(not priv.name.startswith("#"), "a private channel is not a #channel")
+
+
+def test_default_channel_key_is_derived_from_the_name():
+    """Nobody hands out a key for #fri3dcamp: every badge must derive the SAME one, or the
+    camp channel silently splits into badges that cannot read each other."""
+    a = Channel.from_hashtag_name("fri3dcamp")
+    b = Channel.from_hashtag_name("#fri3dcamp")     # typed with the '#'
+    _assert(a.secret == b.secret, "with or without the '#' must give one channel")
+    # the key is sha256("#fri3dcamp")[:16], zero-padded -- pin it so it can never drift
+    expect = hashlib.sha256(b"#fri3dcamp").digest()[:16] + b"\x00" * 16
+    _assert(a.secret == expect, "the derivation must stay sha256('#' + name)[:16]")
+    _assert(a.hash == hashlib.sha256(expect[:16]).digest()[0], "channel hash = sha256(key16)[0]")
+
+
 def _run_all():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]
